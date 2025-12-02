@@ -4,7 +4,7 @@ export interface OAuthResponse {
 }
 
 export interface ChatMessage {
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   content: string;
 }
 
@@ -34,4 +34,5 @@ export interface ChatResponse {
     precached_prompt_tokens: number;
   };
 }
+
 
