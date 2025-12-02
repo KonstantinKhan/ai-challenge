@@ -9,7 +9,7 @@ const SYSTEM_PROMPT = `You are a task formulation analyzer and entity extraction
 IMPORTANT: Return ONLY compact, minified JSON without extra blank lines between fields. Format it as a single block:
 
 {
-  "createAt": "ACTUAL current time in UTC ISO 8601 format (e.g., 2025-12-02T14:35:22Z)",
+  "createAt": "Current request timestamp (copy from CURRENT_UTC_TIME above)",
   "title": "Task name with key context. Must answer 'What needs to be done?'; Start with a verb in infinitive form; Include important context (e.g., reason for call, document name, specific topic). CRITICAL: The title MUST be in the SAME LANGUAGE as the user's message!",
   "source": "Original user message without modifications",
   "status": "inbox",
@@ -19,9 +19,10 @@ IMPORTANT: Return ONLY compact, minified JSON without extra blank lines between 
 
 PROCESSING RULES:
 
-1. createAt: ALWAYS use the ACTUAL CURRENT time in UTC ISO 8601 format. 
-   Do NOT use the example time. Generate the real timestamp at the moment of analysis.
-   Format: YYYY-MM-DDTHH:MM:SSZ (e.g., if now is December 2, 2025 at 14:35:22 UTC, use "2025-12-02T14:35:22Z")
+1. createAt: Find the line "CURRENT_UTC_TIME:" at the very beginning of this prompt.
+   Copy EXACTLY that timestamp value into the createAt field.
+   Example: if you see "CURRENT_UTC_TIME: 2025-12-02T15:30:45.123Z", 
+   then createAt should be "2025-12-02T15:30:45.123Z"
 
 2. title: Extract the main action and include key context from the message.
    Start with a verb in infinitive form, add important details.
@@ -139,10 +140,21 @@ async function getAccessToken(): Promise<string> {
 export async function sendMessage(messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>): Promise<string> {
   const accessToken = await getAccessToken();
 
+  // Генерируем текущее UTC время
+  const currentUTCTime = new Date().toISOString();
+  
+  // Добавляем текущее время в начало системного промпта
+  const systemPromptWithTime = `=== REQUEST METADATA ===
+CURRENT_UTC_TIME: ${currentUTCTime}
+This is the timestamp when the user's request was received.
+========================
+
+${SYSTEM_PROMPT}`;
+
   const requestBody: ChatRequest = {
     model: 'GigaChat',
     messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: systemPromptWithTime },
       ...messages,
     ],
   };
