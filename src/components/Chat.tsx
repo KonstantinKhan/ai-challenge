@@ -3,18 +3,13 @@ import { sendMessage } from '../services/gigachat';
 import { MessageInput } from './MessageInput';
 import type { ChatMessage } from '../types/gigachat';
 
-const MAX_MESSAGES = 5;
-
 export function Chat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const messageCount = messages.filter(m => m.role === 'user').length;
-  const canSendMessage = messageCount < MAX_MESSAGES;
-
   const handleSend = async (userMessage: string) => {
-    if (!canSendMessage || isLoading) return;
+    if (isLoading) return;
 
     const newUserMessage: ChatMessage = {
       role: 'user',
@@ -54,18 +49,13 @@ export function Chat() {
       <div className="bg-white shadow-sm border-b border-gray-200 px-4 py-3">
         <div className="max-w-4xl mx-auto flex justify-between items-center">
           <h1 className="text-xl font-semibold text-gray-800">GigaChat</h1>
-          <div className="flex items-center gap-4">
-            <span className="text-sm text-gray-600">
-              Сообщений: {messageCount} / {MAX_MESSAGES}
-            </span>
-            <button
-              onClick={handleClear}
-              disabled={messages.length === 0}
-              className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors text-sm"
-            >
-              Очистить диалог
-            </button>
-          </div>
+          <button
+            onClick={handleClear}
+            disabled={messages.length === 0}
+            className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors text-sm"
+          >
+            Очистить диалог
+          </button>
         </div>
       </div>
 
@@ -74,7 +64,7 @@ export function Chat() {
           {messages.length === 0 && (
             <div className="text-center text-gray-500 mt-20">
               <p className="text-lg">Начните диалог с GigaChat</p>
-              <p className="text-sm mt-2">Вы можете отправить до {MAX_MESSAGES} сообщений в одном диалоге</p>
+              <p className="text-sm mt-2">Опишите вашу задачу, и я помогу её сформулировать</p>
             </div>
           )}
 
@@ -112,18 +102,12 @@ export function Chat() {
               <p>{error}</p>
             </div>
           )}
-
-          {!canSendMessage && messages.length > 0 && (
-            <div className="bg-yellow-100 border border-yellow-400 text-yellow-700 px-4 py-3 rounded-lg">
-              <p>Достигнут лимит сообщений ({MAX_MESSAGES}). Очистите диалог, чтобы начать новый.</p>
-            </div>
-          )}
         </div>
       </div>
 
       <div className="bg-white border-t border-gray-200 px-4 py-4">
         <div className="max-w-4xl mx-auto">
-          <MessageInput onSend={handleSend} disabled={!canSendMessage || isLoading} />
+          <MessageInput onSend={handleSend} disabled={isLoading} />
         </div>
       </div>
     </div>
