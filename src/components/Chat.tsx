@@ -1,12 +1,15 @@
 import { useState } from 'react';
-import { sendMessage } from '../services/gigachat';
+import { sendMessage, SYSTEM_PROMPT } from '../services/gigachat';
 import { MessageInput } from './MessageInput';
+import { PromptEditor } from './PromptEditor';
 import type { ChatMessage } from '../types/gigachat';
 
 export function Chat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [systemPrompt, setSystemPrompt] = useState<string>(SYSTEM_PROMPT);
+  const [isPromptEditorOpen, setIsPromptEditorOpen] = useState(false);
 
   const handleSend = async (userMessage: string) => {
     if (isLoading) return;
@@ -22,7 +25,7 @@ export function Chat() {
     setError(null);
 
     try {
-      const response = await sendMessage(updatedMessages);
+      const response = await sendMessage(updatedMessages, systemPrompt);
       
       const assistantMessage: ChatMessage = {
         role: 'assistant',
@@ -49,13 +52,21 @@ export function Chat() {
       <div className="bg-white shadow-sm border-b border-gray-200 px-4 py-3">
         <div className="max-w-4xl mx-auto flex justify-between items-center">
           <h1 className="text-xl font-semibold text-gray-800">GigaChat</h1>
-          <button
-            onClick={handleClear}
-            disabled={messages.length === 0}
-            className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors text-sm"
-          >
-            Очистить диалог
-          </button>
+          <div className="flex gap-3">
+            <button
+              onClick={() => setIsPromptEditorOpen(true)}
+              className="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors text-sm"
+            >
+              Редактировать промпт
+            </button>
+            <button
+              onClick={handleClear}
+              disabled={messages.length === 0}
+              className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors text-sm"
+            >
+              Очистить диалог
+            </button>
+          </div>
         </div>
       </div>
 
@@ -110,6 +121,15 @@ export function Chat() {
           <MessageInput onSend={handleSend} disabled={isLoading} />
         </div>
       </div>
+
+      <PromptEditor
+        isOpen={isPromptEditorOpen}
+        currentPrompt={systemPrompt}
+        defaultPrompt={SYSTEM_PROMPT}
+        onClose={() => setIsPromptEditorOpen(false)}
+        onSave={(prompt) => setSystemPrompt(prompt)}
+        onReset={() => setSystemPrompt(SYSTEM_PROMPT)}
+      />
     </div>
   );
 }

@@ -4,7 +4,7 @@ import type { OAuthResponse, ChatRequest, ChatResponse } from '../types/gigachat
 const OAUTH_URL = '/api/oauth';
 const CHAT_URL = '/api/chat';
 
-const SYSTEM_PROMPT = `You are an interactive task formulation assistant. Your goal is to help the user create a well-defined task through conversation.
+export const SYSTEM_PROMPT = `You are an interactive task formulation assistant. Your goal is to help the user create a well-defined task through conversation.
 
 You work in THREE PHASES with STRICT SEQUENTIAL question asking:
 
@@ -222,11 +222,17 @@ async function getAccessToken(): Promise<string> {
 /**
  * Отправка сообщения в GigaChat API
  */
-export async function sendMessage(messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>): Promise<string> {
+export async function sendMessage(
+  messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>,
+  customSystemPrompt?: string
+): Promise<string> {
   const accessToken = await getAccessToken();
 
   // Генерируем текущее UTC время
   const currentUTCTime = new Date().toISOString();
+  
+  // Используем кастомный промпт, если передан, иначе дефолтный
+  const systemPrompt = customSystemPrompt || SYSTEM_PROMPT;
   
   // Добавляем текущее время в начало системного промпта
   const systemPromptWithTime = `=== REQUEST METADATA ===
@@ -234,7 +240,7 @@ CURRENT_UTC_TIME: ${currentUTCTime}
 This is the timestamp when the user's request was received.
 ========================
 
-${SYSTEM_PROMPT}`;
+${systemPrompt}`;
 
   const requestBody: ChatRequest = {
     model: 'GigaChat',
