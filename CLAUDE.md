@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a React TypeScript application for chatting with GigaChat API - an interactive task formulation assistant that helps users create well-defined tasks through conversation. The app uses a three-phase conversational flow to collect task information (formulation, planned date, priority) and outputs structured JSON task data.
+This is a React TypeScript application for chatting with multiple AI models (GigaChat and Hugging Face) - an interactive task formulation assistant that helps users create well-defined tasks through conversation. The app uses a three-phase conversational flow to collect task information (formulation, planned date, priority) and outputs structured JSON task data. Users can switch between different AI models via the UI.
 
 ## Development Commands
 
@@ -31,9 +31,11 @@ Create `.env` file in project root with:
 ```
 VITE_AUTH_TOKEN=your_auth_token_here
 VITE_SCOPE=your_scope_here
+VITE_HF_API_KEY=your_huggingface_api_key_here
 ```
 
-These credentials are required for GigaChat API OAuth authentication.
+- `VITE_AUTH_TOKEN` and `VITE_SCOPE`: Required for GigaChat API OAuth authentication
+- `VITE_HF_API_KEY`: Required for Hugging Face Inference API. Get your API key from https://huggingface.co/settings/tokens
 
 ## Architecture
 
@@ -42,10 +44,13 @@ These credentials are required for GigaChat API OAuth authentication.
 Vite dev server proxies API requests to avoid CORS issues:
 - `/api/oauth` → `https://ngw.devices.sberbank.ru:9443/api/v2/oauth`
 - `/api/chat` → `https://gigachat.devices.sberbank.ru/api/v1/chat/completions`
+- `/api/huggingface` → `https://router.huggingface.co/v1/chat/completions` (optional, direct requests also work)
 
 Configuration in `vite.config.ts:8-22`
 
-### Service Layer (`src/services/gigachat.ts`)
+### Service Layer
+
+#### GigaChat Service (`src/services/gigachat.ts`)
 
 **OAuth Token Management:**
 - Implements token caching with automatic refresh 5 minutes before expiration
@@ -67,6 +72,21 @@ Configuration in `vite.config.ts:8-22`
 - Critical rule: ONE question per message in Phase 1
 - Custom prompts can override default via `systemPrompt` state in Chat component
 
+#### Hugging Face Service (`src/services/huggingface.ts`)
+
+**Chat API:**
+- `sendMessage()` function handles Hugging Face Inference API communication
+- Uses OpenAI-compatible chat completions endpoint: `https://router.huggingface.co/v1/chat/completions`
+- Requires `VITE_HF_API_KEY` environment variable
+- Supports three models:
+  - `meta-llama/Meta-Llama-3-70B-Instruct` (top popularity)
+  - `microsoft/Phi-3-medium-4k-instruct` (middle popularity)
+  - `01-ai/Yi-1.5-9B-Chat` (lower popularity)
+- Accepts message history array, model ID, optional custom system prompt, and temperature
+- Injects current UTC timestamp into system prompt (same as GigaChat)
+- Returns assistant response text
+- Uses same `SYSTEM_PROMPT` as GigaChat for consistency
+
 ### Component Structure
 
 **Chat Component (`src/components/Chat.tsx`):**
@@ -76,10 +96,21 @@ Configuration in `vite.config.ts:8-22`
   - `isLoading`: Boolean for API request status
   - `systemPrompt`: Current system prompt (editable)
   - `isPromptEditorOpen`: Modal visibility control
+  - `selectedModel`: Current selected model configuration (provider + modelId)
 - Functions:
-  - `handleSend()` at line 14: Appends user message, calls API, updates with response
-  - `handleClear()` at line 45: Resets conversation
-- UI features: header with prompt editor button and clear dialog button, message display area with loading spinner, message input at bottom
+  - `handleSend()`: Appends user message, calls appropriate API service based on selected model, updates with response
+  - `handleClear()`: Resets conversation
+- UI features: header with model selector, temperature slider, prompt editor button and clear dialog button, message display area with loading spinner, message input at bottom
+
+**ModelSelector Component (`src/components/ModelSelector.tsx`):**
+- Dropdown component for selecting AI model
+- Available models:
+  - GigaChat (default)
+  - Llama-3-70B (Hugging Face)
+  - Phi-3-medium (Hugging Face)
+  - Yi-1.5-9B (Hugging Face)
+- Disabled during API requests
+- Styled to match existing UI components
 
 **MessageInput Component (`src/components/MessageInput.tsx`):**
 - Handles user input with validation
@@ -97,6 +128,9 @@ Key interfaces:
 - `OAuthResponse`: OAuth token response with `access_token` and `expires_at`
 - `ChatMessage`: Message with `role` ('user' | 'assistant' | 'system') and `content`
 - `ChatRequest`/`ChatResponse`: API request/response structures
+- `ModelProvider`: Type for AI provider ('gigachat' | 'huggingface')
+- `HuggingFaceModel`: Type for Hugging Face model identifiers
+- `ModelConfig`: Configuration object with provider, modelId, and displayName
 
 ## Tech Stack
 
@@ -113,11 +147,14 @@ src/
 ├── components/       # React components
 │   ├── Chat.tsx            # Main chat interface
 │   ├── MessageInput.tsx    # User input component
-│   └── PromptEditor.tsx    # System prompt editor modal
+│   ├── PromptEditor.tsx    # System prompt editor modal
+│   ├── TemperatureSlider.tsx  # Temperature control slider
+│   └── ModelSelector.tsx    # Model selection dropdown
 ├── services/         # API integration
-│   └── gigachat.ts         # GigaChat API client with OAuth
+│   ├── gigachat.ts         # GigaChat API client with OAuth
+│   └── huggingface.ts      # Hugging Face Inference API client
 ├── types/           # TypeScript definitions
-│   └── gigachat.ts         # API types
+│   └── gigachat.ts         # API types and model configurations
 ├── App.tsx          # Root component (renders Chat)
 └── main.tsx         # Entry point
 ```
@@ -130,10 +167,11 @@ The application maintains a single token cache that automatically refreshes befo
 **Message Flow:**
 1. User types in MessageInput
 2. Chat.handleSend() appends to messages array
-3. sendMessage() called with full message history + system prompt
-4. System prompt has UTC timestamp injected at top (for date parsing)
-5. Response appended to messages array
-6. On error, user message is rolled back
+3. Based on selectedModel.provider, either GigaChat or Hugging Face sendMessage() is called
+4. sendMessage() receives full message history + system prompt + model configuration
+5. System prompt has UTC timestamp injected at top (for date parsing)
+6. Response appended to messages array
+7. On error, user message is rolled back
 
 **System Prompt Customization:**
 The default SYSTEM_PROMPT in `services/gigachat.ts` can be overridden at runtime via the PromptEditor UI. The Chat component maintains customized prompt in state and passes it to `sendMessage()`. This allows testing different conversational flows without code changes.
@@ -141,10 +179,11 @@ The default SYSTEM_PROMPT in `services/gigachat.ts` can be overridden at runtime
 ## Common Patterns
 
 **Adding New API Endpoints:**
-1. Add proxy configuration to `vite.config.ts`
+1. Add proxy configuration to `vite.config.ts` (if needed for CORS)
 2. Create/update TypeScript interfaces in `src/types/`
-3. Implement service function in `src/services/` using `getAccessToken()` for auth
-4. Handle response in component layer
+3. Implement service function in `src/services/` with `sendMessage()` signature matching existing services
+4. Add model configuration to ModelSelector component
+5. Update Chat component to handle new provider in handleSend()
 
 **State Management:**
 All state is managed via React hooks (useState) in component layer. No external state management library is used.

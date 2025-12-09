@@ -18,6 +18,20 @@ export default defineConfig({
         secure: false,
         rewrite: (path) => path.replace(/^\/api\/chat/, '/api/v1/chat/completions'),
       },
+      '/api/huggingface': {
+        target: 'https://router.huggingface.co',
+        changeOrigin: true,
+        secure: true,
+        rewrite: (path) => path.replace(/^\/api\/huggingface/, '/v1/chat/completions'),
+        configure: (proxy, _options) => {
+          proxy.on('proxyReq', (proxyReq, req, _res) => {
+            // Передаем все заголовки от клиента, включая Authorization
+            if (req.headers.authorization) {
+              proxyReq.setHeader('Authorization', req.headers.authorization);
+            }
+          });
+        },
+      },
     },
   },
 })

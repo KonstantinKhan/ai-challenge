@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { sendMessage, SYSTEM_PROMPT } from '../services/gigachat';
+import { sendMessage as sendGigaChatMessage, SYSTEM_PROMPT } from '../services/gigachat';
+import { sendMessage as sendHuggingFaceMessage } from '../services/huggingface';
 import { MessageInput } from './MessageInput';
 import { PromptEditor } from './PromptEditor';
 import { TemperatureSlider } from './TemperatureSlider';
-import type { ChatMessage } from '../types/gigachat';
+import { ModelSelector } from './ModelSelector';
+import type { ChatMessage, ModelConfig, HuggingFaceModel } from '../types/gigachat';
 
 export function Chat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -14,6 +16,18 @@ export function Chat() {
   const [temperature, setTemperature] = useState<number>(0.87);
   const [isPromptEditorOpen, setIsPromptEditorOpen] = useState(false);
   const [skipSystemPrompt, setSkipSystemPrompt] = useState<boolean>(false);
+  const [selectedModel, setSelectedModel] = useState<ModelConfig>({
+    provider: 'gigachat',
+    modelId: 'GigaChat',
+    displayName: 'GigaChat',
+  });
+
+  const formatDuration = (ms: number): string => {
+    if (ms < 1000) {
+      return `${Math.round(ms)}ms`;
+    }
+    return `${(ms / 1000).toFixed(2)}s`;
+  };
 
   const handleSend = async (userMessage: string) => {
     if (isLoading) return;
@@ -29,12 +43,32 @@ export function Chat() {
     setError(null);
 
     try {
+      const startTime = performance.now();
       const promptToUse = skipSystemPrompt ? '' : systemPrompt;
-      const response = await sendMessage(updatedMessages, promptToUse, temperature);
+      let response: string;
+      let totalTokens: number | undefined;
+
+      if (selectedModel.provider === 'gigachat') {
+        response = await sendGigaChatMessage(updatedMessages, promptToUse, temperature);
+      } else {
+        const hfResponse = await sendHuggingFaceMessage(
+          updatedMessages,
+          selectedModel.modelId as HuggingFaceModel,
+          promptToUse,
+          temperature
+        );
+        response = hfResponse.content;
+        totalTokens = hfResponse.totalTokens;
+      }
+
+      const endTime = performance.now();
+      const duration = endTime - startTime;
 
       const assistantMessage: ChatMessage = {
         role: 'assistant',
         content: response,
+        totalTokens,
+        duration,
       };
 
       setMessages([...updatedMessages, assistantMessage]);
@@ -56,9 +90,14 @@ export function Chat() {
     <div className="flex flex-col h-screen bg-gray-50">
       <div className="bg-white shadow-sm border-b border-gray-200 px-4 py-3">
         <div className="max-w-4xl mx-auto flex justify-between items-center gap-4">
-          <h1 className="text-xl font-semibold text-gray-800">GigaChat</h1>
+          <h1 className="text-xl font-semibold text-gray-800">AI Chat</h1>
 
-          <div className="flex-1 flex justify-center">
+          <div className="flex-1 flex justify-center items-center gap-4">
+            <ModelSelector
+              value={selectedModel}
+              onChange={setSelectedModel}
+              disabled={isLoading}
+            />
             <TemperatureSlider
               value={temperature}
               onChange={setTemperature}
@@ -87,8 +126,7 @@ export function Chat() {
         <div className="max-w-4xl mx-auto space-y-4">
           {messages.length === 0 && (
             <div className="text-center text-gray-500 mt-20">
-              <p className="text-lg">Начните диалог с GigaChat</p>
-              <p className="text-sm mt-2">Опишите вашу задачу, и я помогу её сформулировать</p>
+              <p className="text-lg">Начните диалог с AI</p>
             </div>
           )}
 
@@ -97,7 +135,7 @@ export function Chat() {
             return (
               <div
                 key={index}
-                className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}
+                className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}
               >
                 <div
                   className={`max-w-[80%] rounded-lg px-4 py-2 ${
@@ -214,6 +252,15 @@ export function Chat() {
                     {message.content}
                   </ReactMarkdown>
                 </div>
+                {!isUser && (message.totalTokens !== undefined || message.duration !== undefined) && (
+                  <div className="mt-1 px-4">
+                    <span className="text-xs text-gray-500">
+                      {message.totalTokens !== undefined && `Токенов использовано: ${message.totalTokens}`}
+                      {message.totalTokens !== undefined && message.duration !== undefined && ' • '}
+                      {message.duration !== undefined && `Время выполнения: ${formatDuration(message.duration)}`}
+                    </span>
+                  </div>
+                )}
               </div>
             );
           })}
