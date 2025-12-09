@@ -224,9 +224,42 @@ async function getAccessToken(): Promise<string> {
  */
 export async function sendMessage(
   messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>,
-  customSystemPrompt?: string
+  customSystemPrompt?: string,
+  temperature: number = 0.87
 ): Promise<string> {
   const accessToken = await getAccessToken();
+
+  // Если передан пустой промпт, не добавляем системное сообщение
+  if (customSystemPrompt === '') {
+    const requestBody: ChatRequest = {
+      model: 'GigaChat',
+      messages: messages,
+      temperature,
+    };
+
+    try {
+      const response = await axios.post<ChatResponse>(
+        CHAT_URL,
+        requestBody,
+        {
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
+        }
+      );
+
+      if (response.data.choices && response.data.choices.length > 0) {
+        return response.data.choices[0].message.content;
+      }
+
+      throw new Error('Пустой ответ от API');
+    } catch (error) {
+      console.error('Ошибка при отправке сообщения:', error);
+      throw error;
+    }
+  }
 
   // Генерируем текущее UTC время
   const currentUTCTime = new Date().toISOString();
@@ -248,6 +281,7 @@ ${systemPrompt}`;
       { role: 'system', content: systemPromptWithTime },
       ...messages,
     ],
+    temperature,
   };
 
   try {

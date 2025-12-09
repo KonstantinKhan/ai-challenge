@@ -11,6 +11,7 @@ export interface ChatMessage {
 export interface ChatRequest {
   model: string;
   messages: ChatMessage[];
+  temperature?: number;
 }
 
 export interface ChatChoice {

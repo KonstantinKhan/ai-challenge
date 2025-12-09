@@ -1,3 +1,55 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer components {
+  .temperature-gradient {
+    background: linear-gradient(
+      to right,
+      rgb(59, 130, 246) 0%,
+      rgb(96, 165, 250) 12.5%,
+      rgb(34, 211, 238) 25%,
+      rgb(52, 211, 153) 43.5%,
+      rgb(251, 191, 36) 50%,
+      rgb(251, 146, 60) 70%,
+      rgb(249, 115, 22) 85%,
+      rgb(239, 68, 68) 90%,
+      rgb(220, 38, 38) 95%,
+      rgb(185, 28, 28) 100%
+    );
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  }
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: white;
+  border: 2px solid rgb(59, 130, 246);
+  cursor: pointer;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  transition: transform 0.15s ease-in-out;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+  border-color: rgb(37, 99, 235);
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: white;
+  border: 2px solid rgb(59, 130, 246);
+  cursor: pointer;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  transition: transform 0.15s ease-in-out;
+}
+
+input[type="range"]::-moz-range-thumb:hover {
+  transform: scale(1.15);
+  border-color: rgb(37, 99, 235);
+}
