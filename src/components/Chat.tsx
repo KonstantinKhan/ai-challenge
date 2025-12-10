@@ -2,6 +2,7 @@ import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { sendMessage as sendGigaChatMessage, SYSTEM_PROMPT } from '../services/gigachat';
 import { sendMessage as sendHuggingFaceMessage } from '../services/huggingface';
+import { sendMessage as sendOpenRouterMessage } from '../services/openrouter';
 import { MessageInput } from './MessageInput';
 import { PromptEditor } from './PromptEditor';
 import { TemperatureSlider } from './TemperatureSlider';
@@ -48,8 +49,16 @@ export function Chat() {
       let response: string;
       let totalTokens: number | undefined;
 
+      let tokenUsage;
+
       if (selectedModel.provider === 'gigachat') {
-        response = await sendGigaChatMessage(updatedMessages, promptToUse, temperature);
+        const gigachatResponse = await sendGigaChatMessage(updatedMessages, promptToUse, temperature);
+        response = gigachatResponse.content;
+        tokenUsage = gigachatResponse.tokenUsage;
+      } else if (selectedModel.provider === 'openrouter') {
+        const openRouterResponse = await sendOpenRouterMessage(updatedMessages, promptToUse, temperature);
+        response = openRouterResponse.content;
+        tokenUsage = openRouterResponse.tokenUsage;
       } else {
         const hfResponse = await sendHuggingFaceMessage(
           updatedMessages,
@@ -68,6 +77,7 @@ export function Chat() {
         role: 'assistant',
         content: response,
         totalTokens,
+        tokenUsage,
         duration,
       };
 
@@ -252,13 +262,41 @@ export function Chat() {
                     {message.content}
                   </ReactMarkdown>
                 </div>
-                {!isUser && (message.totalTokens !== undefined || message.duration !== undefined) && (
-                  <div className="mt-1 px-4">
-                    <span className="text-xs text-gray-500">
-                      {message.totalTokens !== undefined && `Токенов использовано: ${message.totalTokens}`}
-                      {message.totalTokens !== undefined && message.duration !== undefined && ' • '}
-                      {message.duration !== undefined && `Время выполнения: ${formatDuration(message.duration)}`}
-                    </span>
+                {!isUser && (message.tokenUsage || message.totalTokens !== undefined || message.duration !== undefined) && (
+                  <div className="mt-2 px-4">
+                    <div className="bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-700 space-y-1.5 border border-gray-200">
+                      {message.tokenUsage ? (
+                        <>
+                          <div>
+                            Токены запроса: <span className="text-blue-600 font-semibold">{message.tokenUsage.prompt_tokens}</span> • 
+                            Токены генерации: <span className="text-green-600 font-semibold">{message.tokenUsage.completion_tokens}</span>
+                            {message.tokenUsage.precached_prompt_tokens !== undefined && (
+                              <> • Кэшированные: <span className="text-indigo-600 font-semibold">{message.tokenUsage.precached_prompt_tokens}</span></>
+                            )}
+                          </div>
+                          <div>
+                            Всего токенов (к тарификации): <span className="text-amber-600 font-semibold">{message.tokenUsage.total_tokens}</span>
+                            {message.duration !== undefined && (
+                              <> • Время выполнения: <span className="text-slate-600 font-medium">{formatDuration(message.duration)}</span></>
+                            )}
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          {message.totalTokens !== undefined && (
+                            <>
+                              Токенов использовано: <span className="text-amber-600 font-semibold">{message.totalTokens}</span>
+                            </>
+                          )}
+                          {message.totalTokens !== undefined && message.duration !== undefined && ' • '}
+                          {message.duration !== undefined && (
+                            <>
+                              Время выполнения: <span className="text-slate-600 font-medium">{formatDuration(message.duration)}</span>
+                            </>
+                          )}
+                        </>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>

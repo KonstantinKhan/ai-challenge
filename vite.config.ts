@@ -32,6 +32,26 @@ export default defineConfig({
           });
         },
       },
+      '/api/openrouter': {
+        target: 'https://openrouter.ai',
+        changeOrigin: true,
+        secure: true,
+        rewrite: (path) => path.replace(/^\/api\/openrouter/, '/api/v1/chat/completions'),
+        configure: (proxy, _options) => {
+          proxy.on('proxyReq', (proxyReq, req, _res) => {
+            // Передаем все заголовки от клиента, включая Authorization
+            if (req.headers.authorization) {
+              proxyReq.setHeader('Authorization', req.headers.authorization);
+            }
+            if (req.headers['http-referer']) {
+              proxyReq.setHeader('HTTP-Referer', req.headers['http-referer']);
+            }
+            if (req.headers['x-title']) {
+              proxyReq.setHeader('X-Title', req.headers['x-title']);
+            }
+          });
+        },
+      },
     },
   },
 })

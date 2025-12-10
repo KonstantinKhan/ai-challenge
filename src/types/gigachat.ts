@@ -3,10 +3,18 @@ export interface OAuthResponse {
   expires_at: number; // unix timestamp в миллисекундах
 }
 
+export interface TokenUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  precached_prompt_tokens?: number;
+  total_tokens: number;
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
   totalTokens?: number;
+  tokenUsage?: TokenUsage;
   duration?: number; // длительность выполнения запроса в миллисекундах
 }
 
@@ -38,7 +46,7 @@ export interface ChatResponse {
   };
 }
 
-export type ModelProvider = 'gigachat' | 'huggingface';
+export type ModelProvider = 'gigachat' | 'huggingface' | 'openrouter';
 
 export type HuggingFaceModel = 
   | 'deepseek-ai/DeepSeek-V3.2'

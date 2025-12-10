@@ -11,7 +11,7 @@ interface MessageInputProps {
 export function MessageInput({ 
   onSend, 
   disabled = false, 
-  maxLength = 256,
+  maxLength,
   skipSystemPrompt = false,
   onSkipSystemPromptChange
 }: MessageInputProps) {
@@ -26,10 +26,7 @@ export function MessageInput({
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const value = e.target.value;
-    if (value.length <= maxLength) {
-      setMessage(value);
-    }
+    setMessage(e.target.value);
   };
 
   return (
@@ -49,7 +46,7 @@ export function MessageInput({
             placeholder="Введите сообщение..."
             className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed resize-none"
             rows={3}
-            maxLength={maxLength}
+            {...(maxLength !== undefined ? { maxLength } : {})}
           />
           <button
             type="submit"
@@ -71,7 +68,7 @@ export function MessageInput({
             <span>Отправить без системного промпта</span>
           </label>
           <span>
-            {message.length} / {maxLength} символов
+            {message.length} {maxLength !== undefined ? `/ ${maxLength}` : ''} символов
           </span>
         </div>
       </div>

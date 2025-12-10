@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { OAuthResponse, ChatRequest, ChatResponse } from '../types/gigachat';
+import type { OAuthResponse, ChatRequest, ChatResponse, TokenUsage } from '../types/gigachat';
 
 const OAUTH_URL = '/api/oauth';
 const CHAT_URL = '/api/chat';
@@ -226,7 +226,7 @@ export async function sendMessage(
   messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>,
   customSystemPrompt?: string,
   temperature: number = 0.87
-): Promise<string> {
+): Promise<{ content: string; tokenUsage?: TokenUsage }> {
   const accessToken = await getAccessToken();
 
   // Если передан пустой промпт, не добавляем системное сообщение
@@ -251,7 +251,10 @@ export async function sendMessage(
       );
 
       if (response.data.choices && response.data.choices.length > 0) {
-        return response.data.choices[0].message.content;
+        return {
+          content: response.data.choices[0].message.content,
+          tokenUsage: response.data.usage,
+        };
       }
 
       throw new Error('Пустой ответ от API');

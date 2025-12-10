@@ -27,6 +27,11 @@ const MODELS: ModelConfig[] = [
     modelId: '0xfader/Qwen2.5-0.5B-Instruct-Gensyn-Swarm-sharp_soaring_rooster',
     displayName: 'Qwen2.5-0.5B',
   },
+  {
+    provider: 'openrouter',
+    modelId: 'mistralai/mistral-7b-instruct:free',
+    displayName: 'Mistral-7B (OpenRouter)',
+  },
 ];
 
 export function ModelSelector({

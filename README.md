@@ -13,9 +13,12 @@ npm install
 ```
 VITE_AUTH_TOKEN=your_auth_token_here
 VITE_SCOPE=your_scope_here
+VITE_OPENROUTER_API_KEY=your_openrouter_api_key_here
 ```
 
-Замените `your_auth_token_here` и `your_scope_here` на ваши реальные значения.
+Замените значения на ваши реальные:
+- `your_auth_token_here` и `your_scope_here` - для GigaChat API
+- `your_openrouter_api_key_here` - API ключ OpenRouter (можно получить на https://openrouter.ai)
 
 ## Запуск
 
@@ -33,7 +36,7 @@ npm run build
 
 - Чат с GigaChat API
 - Автоматическое управление OAuth токенами с обновлением за 5 минут до истечения
-- Ограничение длины сообщения: 256 символов с счетчиком
+- Счетчик символов в поле ввода
 - Ограничение количества сообщений в диалоге: 5 сообщений с счетчиком
 - История переписки с передачей всего контекста в каждом запросе
 - Кнопка очистки диалога
