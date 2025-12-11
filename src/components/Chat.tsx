@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import { sendMessage as sendGigaChatMessage, SYSTEM_PROMPT } from '../services/gigachat';
 import { sendMessage as sendHuggingFaceMessage } from '../services/huggingface';
 import { sendMessage as sendOpenRouterMessage } from '../services/openrouter';
+import { compressMessages, SUMMARY_MARKER, getMessagesForAPI } from '../services/compression';
 import { MessageInput } from './MessageInput';
 import { PromptEditor } from './PromptEditor';
 import { TemperatureSlider } from './TemperatureSlider';
@@ -22,6 +23,7 @@ export function Chat() {
     modelId: 'GigaChat',
     displayName: 'GigaChat',
   });
+  const [assistantResponseCount, setAssistantResponseCount] = useState<number>(0);
 
   const formatDuration = (ms: number): string => {
     if (ms < 1000) {
@@ -51,17 +53,20 @@ export function Chat() {
 
       let tokenUsage;
 
+      // Filter messages for API - send compressed version if summary exists
+      const messagesToSendToAPI = getMessagesForAPI(updatedMessages);
+
       if (selectedModel.provider === 'gigachat') {
-        const gigachatResponse = await sendGigaChatMessage(updatedMessages, promptToUse, temperature);
+        const gigachatResponse = await sendGigaChatMessage(messagesToSendToAPI, promptToUse, temperature);
         response = gigachatResponse.content;
         tokenUsage = gigachatResponse.tokenUsage;
       } else if (selectedModel.provider === 'openrouter') {
-        const openRouterResponse = await sendOpenRouterMessage(updatedMessages, promptToUse, temperature);
+        const openRouterResponse = await sendOpenRouterMessage(messagesToSendToAPI, promptToUse, temperature);
         response = openRouterResponse.content;
         tokenUsage = openRouterResponse.tokenUsage;
       } else {
         const hfResponse = await sendHuggingFaceMessage(
-          updatedMessages,
+          messagesToSendToAPI,
           selectedModel.modelId as HuggingFaceModel,
           promptToUse,
           temperature
@@ -81,7 +86,17 @@ export function Chat() {
         duration,
       };
 
-      setMessages([...updatedMessages, assistantMessage]);
+      const messagesWithAssistant = [...updatedMessages, assistantMessage];
+      setMessages(messagesWithAssistant);
+
+      // Increment assistant response count
+      const newCount = assistantResponseCount + 1;
+      setAssistantResponseCount(newCount);
+
+      // Check if compression should trigger (every 5 assistant responses)
+      if (newCount % 5 === 0) {
+        performCompression(messagesWithAssistant);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Произошла ошибка при отправке сообщения');
       // Удаляем сообщение пользователя при ошибке
@@ -91,9 +106,35 @@ export function Chat() {
     }
   };
 
+  const performCompression = async (currentMessages: ChatMessage[]) => {
+    try {
+      const summaryMessage = await compressMessages(
+        currentMessages,
+        selectedModel
+      );
+
+      // APPEND summary to messages (don't replace - keep all messages visible)
+      setMessages(prevMessages => {
+        // Remove old summary if exists
+        const withoutOldSummary = prevMessages.filter(msg =>
+          !(msg.role === 'system' && msg.content.startsWith(SUMMARY_MARKER))
+        );
+
+        // Append new summary at the end
+        return [...withoutOldSummary, summaryMessage];
+      });
+
+      console.log('Compression successful');
+    } catch (error) {
+      console.error('Compression failed, continuing without compression:', error);
+      // Do nothing - messages remain unchanged
+    }
+  };
+
   const handleClear = () => {
     setMessages([]);
     setError(null);
+    setAssistantResponseCount(0);
   };
 
   return (
@@ -140,7 +181,11 @@ export function Chat() {
             </div>
           )}
 
-          {messages.map((message, index) => {
+          {messages
+            .filter(message =>
+              !(message.role === 'system' && message.content.startsWith(SUMMARY_MARKER))
+            )
+            .map((message, index) => {
             const isUser = message.role === 'user';
             return (
               <div

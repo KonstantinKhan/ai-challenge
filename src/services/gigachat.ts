@@ -301,7 +301,10 @@ ${systemPrompt}`;
     );
 
     if (response.data.choices && response.data.choices.length > 0) {
-      return response.data.choices[0].message.content;
+      return {
+        content: response.data.choices[0].message.content,
+        tokenUsage: response.data.usage,
+      };
     }
 
     throw new Error('Пустой ответ от API');
