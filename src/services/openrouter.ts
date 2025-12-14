@@ -1,6 +1,5 @@
 import axios from 'axios';
 import type { ChatMessage, TokenUsage } from '../types/gigachat';
-import { SYSTEM_PROMPT } from './gigachat';
 
 const OPENROUTER_API_URL = '/api/openrouter';
 
@@ -45,31 +44,9 @@ export async function sendMessage(
     throw new Error('VITE_OPENROUTER_API_KEY должна быть установлена в переменных окружения');
   }
 
-  // Генерируем текущее UTC время
-  const currentUTCTime = new Date().toISOString();
-  
-  // Используем кастомный промпт, если передан, иначе дефолтный
-  const systemPrompt = customSystemPrompt || SYSTEM_PROMPT;
-  
-  // Добавляем текущее время в начало системного промпта
-  const systemPromptWithTime = `=== REQUEST METADATA ===
-CURRENT_UTC_TIME: ${currentUTCTime}
-This is the timestamp when the user's request was received.
-========================
-
-${systemPrompt}`;
-
-  // Если передан пустой промпт, не добавляем системное сообщение
-  const messagesToSend = customSystemPrompt === '' 
-    ? messages 
-    : [
-        { role: 'system' as const, content: systemPromptWithTime },
-        ...messages,
-      ];
-
   const requestBody: OpenRouterRequest = {
     model: MODEL_ID,
-    messages: messagesToSend,
+    messages: messages,
     temperature,
   };
 

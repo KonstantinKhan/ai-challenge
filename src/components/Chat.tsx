@@ -1,29 +1,42 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { sendMessage as sendGigaChatMessage, SYSTEM_PROMPT } from '../services/gigachat';
+import { sendMessage as sendGigaChatMessage } from '../services/gigachat';
 import { sendMessage as sendHuggingFaceMessage } from '../services/huggingface';
 import { sendMessage as sendOpenRouterMessage } from '../services/openrouter';
 import { compressMessages, SUMMARY_MARKER, getMessagesForAPI } from '../services/compression';
+import { 
+  saveConversation, 
+  loadConversation, 
+  getCurrentConversationId, 
+  setCurrentConversationId,
+  generateConversationTitle,
+  createNewConversation
+} from '../services/conversationStorage';
 import { MessageInput } from './MessageInput';
 import { PromptEditor } from './PromptEditor';
 import { TemperatureSlider } from './TemperatureSlider';
 import { ModelSelector } from './ModelSelector';
+import { ConversationManager } from './ConversationManager';
 import type { ChatMessage, ModelConfig, HuggingFaceModel } from '../types/gigachat';
+import type { SavedConversation } from '../types/conversation';
 
 export function Chat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [systemPrompt, setSystemPrompt] = useState<string>(SYSTEM_PROMPT);
+  const [systemPrompt, setSystemPrompt] = useState<string>('');
   const [temperature, setTemperature] = useState<number>(0.87);
   const [isPromptEditorOpen, setIsPromptEditorOpen] = useState(false);
-  const [skipSystemPrompt, setSkipSystemPrompt] = useState<boolean>(false);
   const [selectedModel, setSelectedModel] = useState<ModelConfig>({
     provider: 'gigachat',
     modelId: 'GigaChat',
     displayName: 'GigaChat',
   });
   const [assistantResponseCount, setAssistantResponseCount] = useState<number>(0);
+  const [currentConversationId, setCurrentConversationIdState] = useState<string | null>(null);
+  const [isConversationManagerOpen, setIsConversationManagerOpen] = useState(false);
+  const saveTimeoutRef = useRef<number | null>(null);
+  const isInitialLoadRef = useRef(true);
 
   const formatDuration = (ms: number): string => {
     if (ms < 1000) {
@@ -31,6 +44,87 @@ export function Chat() {
     }
     return `${(ms / 1000).toFixed(2)}s`;
   };
+
+  // Автосохранение диалога с дебаунсом
+  const autoSaveConversation = useCallback(() => {
+    if (messages.length === 0) return;
+
+    // Очищаем предыдущий таймер
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+
+    // Устанавливаем новый таймер с дебаунсом 500ms
+    saveTimeoutRef.current = setTimeout(() => {
+      try {
+        const existingConversation = currentConversationId 
+          ? loadConversation(currentConversationId) 
+          : null;
+
+        const conversation: SavedConversation = {
+          id: currentConversationId || (existingConversation?.id || ''),
+          title: generateConversationTitle(messages),
+          createdAt: existingConversation?.createdAt || new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          systemPrompt,
+          messages,
+          modelConfig: selectedModel,
+          temperature,
+          assistantResponseCount,
+        };
+
+        // Если нет ID, создаем новый диалог
+        if (!conversation.id) {
+          const newConversation = createNewConversation(
+            systemPrompt,
+            selectedModel,
+            temperature
+          );
+          conversation.id = newConversation.id;
+          conversation.createdAt = newConversation.createdAt;
+        }
+
+        saveConversation(conversation);
+        setCurrentConversationIdState(conversation.id);
+        setCurrentConversationId(conversation.id);
+      } catch (error) {
+        console.error('Ошибка при автосохранении диалога:', error);
+      }
+    }, 500);
+  }, [messages, systemPrompt, selectedModel, temperature, assistantResponseCount, currentConversationId]);
+
+  // Загрузка диалога при монтировании
+  useEffect(() => {
+    if (isInitialLoadRef.current) {
+      isInitialLoadRef.current = false;
+      const savedId = getCurrentConversationId();
+      
+      if (savedId) {
+        const savedConversation = loadConversation(savedId);
+        if (savedConversation) {
+          setMessages(savedConversation.messages);
+          setSystemPrompt(savedConversation.systemPrompt);
+          setSelectedModel(savedConversation.modelConfig);
+          setTemperature(savedConversation.temperature);
+          setAssistantResponseCount(savedConversation.assistantResponseCount);
+          setCurrentConversationIdState(savedConversation.id);
+        }
+      }
+    }
+  }, []);
+
+  // Автосохранение при изменении данных
+  useEffect(() => {
+    if (!isInitialLoadRef.current) {
+      autoSaveConversation();
+    }
+    
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, [messages, systemPrompt, selectedModel, temperature, assistantResponseCount, autoSaveConversation]);
 
   const handleSend = async (userMessage: string) => {
     if (isLoading) return;
@@ -47,7 +141,6 @@ export function Chat() {
 
     try {
       const startTime = performance.now();
-      const promptToUse = skipSystemPrompt ? '' : systemPrompt;
       let response: string;
       let totalTokens: number | undefined;
 
@@ -57,18 +150,18 @@ export function Chat() {
       const messagesToSendToAPI = getMessagesForAPI(updatedMessages);
 
       if (selectedModel.provider === 'gigachat') {
-        const gigachatResponse = await sendGigaChatMessage(messagesToSendToAPI, promptToUse, temperature);
+        const gigachatResponse = await sendGigaChatMessage(messagesToSendToAPI, '', temperature);
         response = gigachatResponse.content;
         tokenUsage = gigachatResponse.tokenUsage;
       } else if (selectedModel.provider === 'openrouter') {
-        const openRouterResponse = await sendOpenRouterMessage(messagesToSendToAPI, promptToUse, temperature);
+        const openRouterResponse = await sendOpenRouterMessage(messagesToSendToAPI, '', temperature);
         response = openRouterResponse.content;
         tokenUsage = openRouterResponse.tokenUsage;
       } else {
         const hfResponse = await sendHuggingFaceMessage(
           messagesToSendToAPI,
           selectedModel.modelId as HuggingFaceModel,
-          promptToUse,
+          '',
           temperature
         );
         response = hfResponse.content;
@@ -135,6 +228,55 @@ export function Chat() {
     setMessages([]);
     setError(null);
     setAssistantResponseCount(0);
+    setCurrentConversationIdState(null);
+    setCurrentConversationId(null);
+  };
+
+  const handleNewConversation = () => {
+    // Если есть сообщения, сохраняем текущий диалог
+    if (messages.length > 0) {
+      const existingConversation = currentConversationId 
+        ? loadConversation(currentConversationId) 
+        : null;
+
+      const conversation: SavedConversation = {
+        id: currentConversationId || '',
+        title: generateConversationTitle(messages),
+        createdAt: existingConversation?.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        systemPrompt,
+        messages,
+        modelConfig: selectedModel,
+        temperature,
+        assistantResponseCount,
+      };
+
+      // Если нет ID, создаем новый
+      if (!conversation.id) {
+        const newConv = createNewConversation(systemPrompt, selectedModel, temperature);
+        conversation.id = newConv.id;
+        conversation.createdAt = newConv.createdAt;
+      }
+
+      saveConversation(conversation);
+    }
+
+    // Очищаем состояние для нового диалога
+    setMessages([]);
+    setError(null);
+    setAssistantResponseCount(0);
+    setCurrentConversationIdState(null);
+    setCurrentConversationId(null);
+  };
+
+  const handleLoadConversation = (conversation: SavedConversation) => {
+    setMessages(conversation.messages);
+    setSystemPrompt(conversation.systemPrompt);
+    setSelectedModel(conversation.modelConfig);
+    setTemperature(conversation.temperature);
+    setAssistantResponseCount(conversation.assistantResponseCount);
+    setCurrentConversationIdState(conversation.id);
+    setError(null);
   };
 
   return (
@@ -157,10 +299,22 @@ export function Chat() {
 
           <div className="flex gap-3">
             <button
+              onClick={() => setIsConversationManagerOpen(true)}
+              className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm"
+            >
+              Сохраненные диалоги
+            </button>
+            <button
               onClick={() => setIsPromptEditorOpen(true)}
               className="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors text-sm"
             >
               Редактировать промпт
+            </button>
+            <button
+              onClick={handleNewConversation}
+              className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors text-sm"
+            >
+              Создать новый диалог
             </button>
             <button
               onClick={handleClear}
@@ -373,8 +527,6 @@ export function Chat() {
           <MessageInput 
             onSend={handleSend} 
             disabled={isLoading}
-            skipSystemPrompt={skipSystemPrompt}
-            onSkipSystemPromptChange={setSkipSystemPrompt}
           />
         </div>
       </div>
@@ -382,10 +534,16 @@ export function Chat() {
       <PromptEditor
         isOpen={isPromptEditorOpen}
         currentPrompt={systemPrompt}
-        defaultPrompt={SYSTEM_PROMPT}
+        defaultPrompt={''}
         onClose={() => setIsPromptEditorOpen(false)}
         onSave={(prompt) => setSystemPrompt(prompt)}
-        onReset={() => setSystemPrompt(SYSTEM_PROMPT)}
+        onReset={() => setSystemPrompt('')}
+      />
+
+      <ConversationManager
+        isOpen={isConversationManagerOpen}
+        onClose={() => setIsConversationManagerOpen(false)}
+        onLoadConversation={handleLoadConversation}
       />
     </div>
   );

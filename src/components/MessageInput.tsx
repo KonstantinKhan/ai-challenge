@@ -4,16 +4,12 @@ interface MessageInputProps {
   onSend: (message: string) => void;
   disabled?: boolean;
   maxLength?: number;
-  skipSystemPrompt?: boolean;
-  onSkipSystemPromptChange?: (value: boolean) => void;
 }
 
 export function MessageInput({ 
   onSend, 
   disabled = false, 
-  maxLength,
-  skipSystemPrompt = false,
-  onSkipSystemPromptChange
+  maxLength
 }: MessageInputProps) {
   const [message, setMessage] = useState('');
 
@@ -56,17 +52,7 @@ export function MessageInput({
             Отправить
           </button>
         </div>
-        <div className="flex justify-between items-center text-sm text-gray-500">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={skipSystemPrompt}
-              onChange={(e) => onSkipSystemPromptChange?.(e.target.checked)}
-              disabled={disabled}
-              className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-            />
-            <span>Отправить без системного промпта</span>
-          </label>
+        <div className="flex justify-end items-center text-sm text-gray-500">
           <span>
             {message.length} {maxLength !== undefined ? `/ ${maxLength}` : ''} символов
           </span>
