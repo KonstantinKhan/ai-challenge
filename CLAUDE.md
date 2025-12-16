@@ -32,10 +32,12 @@ Create `.env` file in project root with:
 VITE_AUTH_TOKEN=your_auth_token_here
 VITE_SCOPE=your_scope_here
 VITE_HF_API_KEY=your_huggingface_api_key_here
+VITE_MCP_SERVER_URL=your_mcp_server_url_here
 ```
 
 - `VITE_AUTH_TOKEN` and `VITE_SCOPE`: Required for GigaChat API OAuth authentication
 - `VITE_HF_API_KEY`: Required for Hugging Face Inference API. Get your API key from https://huggingface.co/settings/tokens
+- `VITE_MCP_SERVER_URL`: Required for MCP (Model Context Protocol) integration. URL to remote MCP server for tool discovery (e.g., `https://context7.example.com/mcp`)
 
 ## Architecture
 
@@ -87,6 +89,29 @@ Configuration in `vite.config.ts:8-22`
 - Returns assistant response text
 - Uses same `SYSTEM_PROMPT` as GigaChat for consistency
 
+#### MCP Service (`src/services/mcp.ts`)
+
+**Connection Management:**
+- Implements singleton pattern for MCP client instance
+- Uses StreamableHTTP transport for browser compatibility
+- Lazy initialization - connects only when MCP Tools button is clicked
+- `initMCPClient()` function establishes connection to remote MCP server
+- Connection state tracked to prevent multiple concurrent connections
+
+**Tool Discovery:**
+- `getMCPTools()` function fetches available tools list from MCP server
+- Automatically initializes connection if not already connected
+- Transforms MCP SDK types to application-specific types
+- Returns `MCPToolsResponse` with tools array and optional pagination cursor
+- `closeMCPConnection()` function for cleanup and resource management
+- `isMCPConnected()` function to check current connection state
+
+**Type Definitions (`src/types/mcp.ts`):**
+- `MCPTool`: Tool structure with name, description, inputSchema, outputSchema, and annotations
+- `MCPConnectionState`: Connection status tracking ('disconnected' | 'connecting' | 'connected' | 'error')
+- `MCPError`: Structured error information for MCP operations
+- `MCPToolsResponse`: Service response format with tools array and pagination support
+
 ### Component Structure
 
 **Chat Component (`src/components/Chat.tsx`):**
@@ -122,6 +147,21 @@ Configuration in `vite.config.ts:8-22`
 - Features: Save custom prompt, Reset to default, Close without saving
 - Communicates with Chat via `onSave`, `onReset`, and `onClose` callbacks
 
+**MCPToolsModal Component (`src/components/MCPToolsModal.tsx`):**
+- Modal for displaying MCP tools from remote server
+- Master-detail layout: tool list (left panel, 1/3 width) + details (right panel, 2/3 width)
+- Features:
+  - Displays tool name, description from MCP server
+  - Shows input parameters with required/optional indicators
+  - Displays output schema as formatted JSON
+  - Annotations rendered as visual badges (read-only, destructive, idempotent)
+  - Loading states with spinner during tool fetch
+  - Error handling with user-friendly messages
+  - Empty state when no tools available
+- Follows PromptEditor modal pattern for consistent UI/UX
+- Communicates with Chat via `onClose` callback
+- Props: `isOpen`, `onClose`, `tools`, `isLoading`, `error`
+
 ### Type Definitions (`src/types/gigachat.ts`)
 
 Key interfaces:
@@ -137,6 +177,7 @@ Key interfaces:
 - **React 19.2.0** with TypeScript
 - **Vite 7.2.4** for build tooling
 - **Axios 1.13.2** for HTTP requests
+- **@modelcontextprotocol/sdk** for MCP (Model Context Protocol) integration
 - **Tailwind CSS 3.4.18** for styling
 - **ESLint** with typescript-eslint and React hooks plugins
 
@@ -148,13 +189,16 @@ src/
 │   ├── Chat.tsx            # Main chat interface
 │   ├── MessageInput.tsx    # User input component
 │   ├── PromptEditor.tsx    # System prompt editor modal
+│   ├── MCPToolsModal.tsx   # MCP tools display modal
 │   ├── TemperatureSlider.tsx  # Temperature control slider
 │   └── ModelSelector.tsx    # Model selection dropdown
 ├── services/         # API integration
 │   ├── gigachat.ts         # GigaChat API client with OAuth
-│   └── huggingface.ts      # Hugging Face Inference API client
+│   ├── huggingface.ts      # Hugging Face Inference API client
+│   └── mcp.ts              # MCP client for tool discovery
 ├── types/           # TypeScript definitions
-│   └── gigachat.ts         # API types and model configurations
+│   ├── gigachat.ts         # API types and model configurations
+│   └── mcp.ts              # MCP tool types and interfaces
 ├── App.tsx          # Root component (renders Chat)
 └── main.tsx         # Entry point
 ```

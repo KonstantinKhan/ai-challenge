@@ -17,8 +17,11 @@ import { PromptEditor } from './PromptEditor';
 import { TemperatureSlider } from './TemperatureSlider';
 import { ModelSelector } from './ModelSelector';
 import { ConversationManager } from './ConversationManager';
+import { MCPToolsModal } from './MCPToolsModal';
+import { getMCPTools } from '../services/mcp';
 import type { ChatMessage, ModelConfig, HuggingFaceModel } from '../types/gigachat';
 import type { SavedConversation } from '../types/conversation';
+import type { MCPTool } from '../types/mcp';
 
 export function Chat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -35,6 +38,10 @@ export function Chat() {
   const [assistantResponseCount, setAssistantResponseCount] = useState<number>(0);
   const [currentConversationId, setCurrentConversationIdState] = useState<string | null>(null);
   const [isConversationManagerOpen, setIsConversationManagerOpen] = useState(false);
+  const [isMCPModalOpen, setIsMCPModalOpen] = useState(false);
+  const [mcpTools, setMcpTools] = useState<MCPTool[]>([]);
+  const [mcpLoading, setMcpLoading] = useState(false);
+  const [mcpError, setMcpError] = useState<string | null>(null);
   const saveTimeoutRef = useRef<number | null>(null);
   const isInitialLoadRef = useRef(true);
 
@@ -279,6 +286,25 @@ export function Chat() {
     setError(null);
   };
 
+  const handleOpenMCPTools = async () => {
+    setIsMCPModalOpen(true);
+    setMcpLoading(true);
+    setMcpError(null);
+
+    try {
+      const response = await getMCPTools();
+      setMcpTools(response.tools);
+    } catch (error) {
+      setMcpError(
+        error instanceof Error
+          ? error.message
+          : 'Failed to fetch MCP tools'
+      );
+    } finally {
+      setMcpLoading(false);
+    }
+  };
+
   return (
     <div className="flex flex-col h-screen bg-gray-50">
       <div className="bg-white shadow-sm border-b border-gray-200 px-4 py-3">
@@ -309,6 +335,12 @@ export function Chat() {
               className="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors text-sm"
             >
               Редактировать промпт
+            </button>
+            <button
+              onClick={handleOpenMCPTools}
+              className="px-4 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600 transition-colors text-sm"
+            >
+              MCP Tools
             </button>
             <button
               onClick={handleNewConversation}
@@ -544,6 +576,14 @@ export function Chat() {
         isOpen={isConversationManagerOpen}
         onClose={() => setIsConversationManagerOpen(false)}
         onLoadConversation={handleLoadConversation}
+      />
+
+      <MCPToolsModal
+        isOpen={isMCPModalOpen}
+        onClose={() => setIsMCPModalOpen(false)}
+        tools={mcpTools}
+        isLoading={mcpLoading}
+        error={mcpError}
       />
     </div>
   );
