@@ -7,6 +7,16 @@ interface MCPToolsModalProps {
   tools: MCPTool[];
   isLoading: boolean;
   error: string | null;
+
+  toolConfigs: Record<
+    string,
+    {
+      selected: boolean;
+      args: Record<string, string>;
+    }
+  >;
+  onToggleTool: (toolName: string) => void;
+  onChangeArg: (toolName: string, argName: string, value: string) => void;
 }
 
 export function MCPToolsModal({
@@ -15,6 +25,9 @@ export function MCPToolsModal({
   tools,
   isLoading,
   error,
+  toolConfigs,
+  onToggleTool,
+  onChangeArg,
 }: MCPToolsModalProps) {
   const [selectedTool, setSelectedTool] = useState<MCPTool | null>(null);
 
@@ -89,26 +102,59 @@ export function MCPToolsModal({
 
               {!isLoading && !error && tools.length > 0 && (
                 <div className="p-2">
-                  {tools.map((tool) => (
-                    <button
-                      key={tool.name}
-                      onClick={() => setSelectedTool(tool)}
-                      className={`w-full text-left px-4 py-3 rounded-lg mb-2 transition-colors ${
-                        selectedTool?.name === tool.name
-                          ? 'bg-blue-100 border-2 border-blue-500'
-                          : 'bg-gray-50 hover:bg-gray-100 border-2 border-transparent'
-                      }`}
-                    >
-                      <div className="font-medium text-gray-800">
-                        {tool.annotations?.title || tool.name}
-                      </div>
-                      {tool.description && (
-                        <div className="text-sm text-gray-600 mt-1 line-clamp-2">
-                          {tool.description}
+                  {tools.map((tool) => {
+                    const config =
+                      toolConfigs[tool.name] || {
+                        selected: false,
+                        args: {},
+                      };
+                    const isSelected = config.selected;
+
+                    return (
+                      <div
+                        key={tool.name}
+                        className={`w-full px-4 py-3 rounded-lg mb-2 border-2 transition-colors cursor-pointer ${
+                          selectedTool?.name === tool.name
+                            ? 'bg-blue-100 border-blue-500'
+                            : 'bg-gray-50 hover:bg-gray-100 border-transparent'
+                        }`}
+                        onClick={() => setSelectedTool(tool)}
+                      >
+                        <div className="flex justify-between items-start gap-3">
+                          <div>
+                            <div className="font-medium text-gray-800">
+                              {tool.annotations?.title || tool.name}
+                            </div>
+                            {tool.description && (
+                              <div className="text-sm text-gray-600 mt-1 line-clamp-2">
+                                {tool.description}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="flex flex-col items-end gap-1">
+                            <label className="flex items-center gap-1 text-xs text-gray-600">
+                              <input
+                                type="checkbox"
+                                className="rounded border-gray-300"
+                                checked={isSelected}
+                                onChange={(e) => {
+                                  e.stopPropagation();
+                                  onToggleTool(tool.name);
+                                }}
+                              />
+                              <span>Use for next message</span>
+                            </label>
+                            {isSelected && (
+                              <span className="text-[10px] text-purple-600 font-semibold">
+                                Selected
+                              </span>
+                            )}
+                          </div>
                         </div>
-                      )}
-                    </button>
-                  ))}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -137,74 +183,109 @@ export function MCPToolsModal({
                   )}
 
                   {/* Annotations/Hints */}
-                  {selectedTool.annotations && (
-                    selectedTool.annotations.readOnlyHint ||
-                    selectedTool.annotations.destructiveHint ||
-                    selectedTool.annotations.idempotentHint
-                  ) && (
-                    <div className="mb-6">
-                      <h4 className="text-sm font-semibold text-gray-700 mb-2">
-                        Properties
-                      </h4>
-                      <div className="flex flex-wrap gap-2">
-                        {selectedTool.annotations.readOnlyHint && (
-                          <span className="px-2 py-1 bg-blue-100 text-blue-700 text-xs rounded">
-                            Read Only
-                          </span>
-                        )}
-                        {selectedTool.annotations.destructiveHint && (
-                          <span className="px-2 py-1 bg-red-100 text-red-700 text-xs rounded">
-                            Destructive
-                          </span>
-                        )}
-                        {selectedTool.annotations.idempotentHint && (
-                          <span className="px-2 py-1 bg-green-100 text-green-700 text-xs rounded">
-                            Idempotent
-                          </span>
-                        )}
+                  {selectedTool.annotations &&
+                    (selectedTool.annotations.readOnlyHint ||
+                      selectedTool.annotations.destructiveHint ||
+                      selectedTool.annotations.idempotentHint) && (
+                      <div className="mb-6">
+                        <h4 className="text-sm font-semibold text-gray-700 mb-2">
+                          Properties
+                        </h4>
+                        <div className="flex flex-wrap gap-2">
+                          {selectedTool.annotations.readOnlyHint && (
+                            <span className="px-2 py-1 bg-blue-100 text-blue-700 text-xs rounded">
+                              Read Only
+                            </span>
+                          )}
+                          {selectedTool.annotations.destructiveHint && (
+                            <span className="px-2 py-1 bg-red-100 text-red-700 text-xs rounded">
+                              Destructive
+                            </span>
+                          )}
+                          {selectedTool.annotations.idempotentHint && (
+                            <span className="px-2 py-1 bg-green-100 text-green-700 text-xs rounded">
+                              Idempotent
+                            </span>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    )}
 
-                  {/* Input Schema */}
+                  {/* Input Schema + form */}
                   <div className="mb-6">
                     <h4 className="text-sm font-semibold text-gray-700 mb-2">
                       Input Parameters
                     </h4>
-                    {selectedTool.inputSchema.properties && Object.keys(selectedTool.inputSchema.properties).length > 0 ? (
+                    {selectedTool.inputSchema.properties &&
+                    Object.keys(selectedTool.inputSchema.properties).length >
+                      0 ? (
                       <div className="space-y-3">
-                        {Object.entries(selectedTool.inputSchema.properties).map(
-                          ([key, schema]: [string, JSONSchemaProperty]) => (
-                            <div
-                              key={key}
-                              className="border border-gray-200 rounded-lg p-3"
-                            >
-                              <div className="flex items-start justify-between">
-                                <span className="font-mono text-sm text-gray-800">
-                                  {key}
-                                </span>
-                                {selectedTool.inputSchema.required?.includes(key) && (
-                                  <span className="text-xs text-red-600 font-semibold">
-                                    required
+                        {Object.entries(
+                          selectedTool.inputSchema.properties,
+                        ).map(
+                          ([key, schema]: [string, JSONSchemaProperty]) => {
+                            const isRequired =
+                              selectedTool.inputSchema.required?.includes(
+                                key,
+                              ) ?? false;
+                            const config =
+                              toolConfigs[selectedTool.name] || {
+                                selected: false,
+                                args: {},
+                              };
+                            const value = config.args[key] ?? '';
+
+                            return (
+                              <div
+                                key={key}
+                                className="border border-gray-200 rounded-lg p-3"
+                              >
+                                <div className="flex items-start justify-between mb-1">
+                                  <span className="font-mono text-sm text-gray-800">
+                                    {key}
                                   </span>
+                                  {isRequired && (
+                                    <span className="text-xs text-red-600 font-semibold">
+                                      required
+                                    </span>
+                                  )}
+                                </div>
+                                {schema.type && (
+                                  <div className="text-xs text-gray-500 mb-1">
+                                    Type: {schema.type}
+                                  </div>
                                 )}
+                                {schema.description && (
+                                  <div className="text-sm text-gray-600 mb-2">
+                                    {schema.description}
+                                  </div>
+                                )}
+                                <input
+                                  type="text"
+                                  value={value}
+                                  onChange={(e) =>
+                                    onChangeArg(
+                                      selectedTool.name,
+                                      key,
+                                      e.target.value,
+                                    )
+                                  }
+                                  className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                                  placeholder={
+                                    schema.type
+                                      ? `Value (${schema.type})`
+                                      : 'Value'
+                                  }
+                                />
                               </div>
-                              {schema.type && (
-                                <div className="text-xs text-gray-500 mt-1">
-                                  Type: {schema.type}
-                                </div>
-                              )}
-                              {schema.description && (
-                                <div className="text-sm text-gray-600 mt-1">
-                                  {schema.description}
-                                </div>
-                              )}
-                            </div>
-                          )
+                            );
+                          },
                         )}
                       </div>
                     ) : (
-                      <p className="text-sm text-gray-500">No parameters required</p>
+                      <p className="text-sm text-gray-500">
+                        No parameters required
+                      </p>
                     )}
                   </div>
 

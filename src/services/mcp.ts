@@ -6,7 +6,7 @@
  */
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { MCPTool, MCPToolsResponse } from '../types/mcp';
 
@@ -40,11 +40,21 @@ export async function initMCPClient(): Promise<Client> {
     );
   }
 
+  // Log URL for debugging
+  console.log('Connecting to MCP server at:', serverUrl);
+
   isConnecting = true;
 
   try {
-    // Create StreamableHTTP transport
-    mcpTransport = new StreamableHTTPClientTransport(new URL(serverUrl));
+    // Create SSE transport (compatible with current Ktor MCP server)
+    // Explicitly set headers to ensure proper SSE connection
+    mcpTransport = new SSEClientTransport(new URL(serverUrl), {
+      eventSourceInit: {
+        // EventSource automatically sets Accept: text/event-stream,
+        // but we can add additional headers if needed
+        withCredentials: false,
+      },
+    });
 
     // Create client with basic configuration
     mcpClient = new Client(
@@ -69,6 +79,13 @@ export async function initMCPClient(): Promise<Client> {
     mcpTransport = null;
 
     if (error instanceof Error) {
+      // Log more details for debugging
+      console.error('MCP connection error:', {
+        message: error.message,
+        name: error.name,
+        stack: error.stack,
+        serverUrl,
+      });
       throw new Error(`Failed to connect to MCP server: ${error.message}`);
     }
     throw new Error('Failed to connect to MCP server: Unknown error');
@@ -130,6 +147,35 @@ export async function getMCPTools(): Promise<MCPToolsResponse> {
       throw new Error(`Failed to fetch MCP tools: ${error.message}`);
     }
     throw new Error('Failed to fetch MCP tools: Unknown error');
+  }
+}
+
+/**
+ * Call a specific MCP tool by name with provided arguments
+ * Automatically initializes connection if not already connected
+ */
+export async function callMCPTool(
+  toolName: string,
+  args: Record<string, unknown> = {},
+): Promise<unknown> {
+  try {
+    const client = await initMCPClient();
+
+    const result = await client.callTool({
+      name: toolName,
+      arguments: args,
+    });
+
+    return result;
+  } catch (error) {
+    if (error instanceof Error) {
+      throw new Error(
+        `Failed to call MCP tool "${toolName}": ${error.message}`,
+      );
+    }
+    throw new Error(
+      `Failed to call MCP tool "${toolName}": Unknown error`,
+    );
   }
 }
 

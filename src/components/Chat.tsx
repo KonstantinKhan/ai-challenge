@@ -18,10 +18,15 @@ import { TemperatureSlider } from './TemperatureSlider';
 import { ModelSelector } from './ModelSelector';
 import { ConversationManager } from './ConversationManager';
 import { MCPToolsModal } from './MCPToolsModal';
-import { getMCPTools } from '../services/mcp';
+import { getMCPTools, callMCPTool } from '../services/mcp';
 import type { ChatMessage, ModelConfig, HuggingFaceModel } from '../types/gigachat';
 import type { SavedConversation } from '../types/conversation';
 import type { MCPTool } from '../types/mcp';
+
+type MCPToolConfig = {
+  selected: boolean;
+  args: Record<string, string>;
+};
 
 export function Chat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -42,6 +47,7 @@ export function Chat() {
   const [mcpTools, setMcpTools] = useState<MCPTool[]>([]);
   const [mcpLoading, setMcpLoading] = useState(false);
   const [mcpError, setMcpError] = useState<string | null>(null);
+  const [mcpToolConfigs, setMcpToolConfigs] = useState<Record<string, MCPToolConfig>>({});
   const saveTimeoutRef = useRef<number | null>(null);
   const isInitialLoadRef = useRef(true);
 
@@ -133,6 +139,39 @@ export function Chat() {
     };
   }, [messages, systemPrompt, selectedModel, temperature, assistantResponseCount, autoSaveConversation]);
 
+  const handleToggleMCPTool = (toolName: string) => {
+    setMcpToolConfigs((prev) => {
+      const prevConfig = prev[toolName] || { selected: false, args: {} };
+      return {
+        ...prev,
+        [toolName]: {
+          ...prevConfig,
+          selected: !prevConfig.selected,
+        },
+      };
+    });
+  };
+
+  const handleChangeMCPToolArg = (
+    toolName: string,
+    argName: string,
+    value: string,
+  ) => {
+    setMcpToolConfigs((prev) => {
+      const prevConfig = prev[toolName] || { selected: false, args: {} };
+      return {
+        ...prev,
+        [toolName]: {
+          ...prevConfig,
+          args: {
+            ...prevConfig.args,
+            [argName]: value,
+          },
+        },
+      };
+    });
+  };
+
   const handleSend = async (userMessage: string) => {
     if (isLoading) return;
 
@@ -141,8 +180,8 @@ export function Chat() {
       content: userMessage,
     };
 
-    const updatedMessages = [...messages, newUserMessage];
-    setMessages(updatedMessages);
+    const baseMessages = [...messages, newUserMessage];
+
     setIsLoading(true);
     setError(null);
 
@@ -153,15 +192,116 @@ export function Chat() {
 
       let tokenUsage;
 
+      // 1) Вызываем выбранные MCP-инструменты перед запросом к LLM
+      const selectedTools = mcpTools.filter(
+        (tool) => mcpToolConfigs[tool.name]?.selected,
+      );
+
+      const messagesWithTools: ChatMessage[] = [...baseMessages];
+
+      for (const tool of selectedTools) {
+        const config = mcpToolConfigs[tool.name] || {
+          selected: false,
+          args: {},
+        };
+        const rawArgs = config.args || {};
+
+        const required = tool.inputSchema.required || [];
+        const missingRequired = required.filter(
+          (key) => !rawArgs[key] || rawArgs[key].trim() === '',
+        );
+
+        if (missingRequired.length > 0) {
+          const msg = `TOOL: ${tool.name}\n\nERROR: Missing required arguments: ${missingRequired.join(
+            ', ',
+          )}`;
+          messagesWithTools.push({
+            role: 'assistant',
+            content: msg,
+          });
+          continue;
+        }
+
+        const args: Record<string, unknown> = {};
+        const props = tool.inputSchema.properties || {};
+
+        for (const [key, schema] of Object.entries(props)) {
+          const value = rawArgs[key];
+          if (value === undefined || value === '') continue;
+
+          if (schema.type === 'number' || schema.type === 'integer') {
+            const num = Number(value);
+            args[key] = Number.isNaN(num) ? value : num;
+          } else if (schema.type === 'boolean') {
+            const lower = value.toLowerCase();
+            if (lower === 'true' || lower === '1' || lower === 'yes') {
+              args[key] = true;
+            } else if (lower === 'false' || lower === '0' || lower === 'no') {
+              args[key] = false;
+            } else {
+              args[key] = value;
+            }
+          } else {
+            args[key] = value;
+          }
+        }
+
+        try {
+          const rawResult = await callMCPTool(tool.name, args);
+          const prettyJson = JSON.stringify(rawResult, null, 2);
+
+          const toolMessage: ChatMessage = {
+            role: 'assistant',
+            content: [
+              `TOOL: ${tool.name}`,
+              '',
+              'ARGS:',
+              '```json',
+              JSON.stringify(args, null, 2),
+              '```',
+              '',
+              'RESULT (JSON):',
+              '```json',
+              prettyJson,
+              '```',
+            ].join('\n'),
+          };
+
+          messagesWithTools.push(toolMessage);
+        } catch (toolError) {
+          const message =
+            toolError instanceof Error
+              ? toolError.message
+              : `Failed to execute MCP tool "${tool.name}"`;
+
+          const errorMessage: ChatMessage = {
+            role: 'assistant',
+            content: `TOOL: ${tool.name}\n\nERROR: ${message}`,
+          };
+
+          messagesWithTools.push(errorMessage);
+        }
+      }
+
+      setMessages(messagesWithTools);
+
       // Filter messages for API - send compressed version if summary exists
-      const messagesToSendToAPI = getMessagesForAPI(updatedMessages);
+      const messagesToSendToAPI = getMessagesForAPI(messagesWithTools);
 
       if (selectedModel.provider === 'gigachat') {
-        const gigachatResponse = await sendGigaChatMessage(messagesToSendToAPI, '', temperature);
+        const gigachatResponse = await sendGigaChatMessage(
+          messagesToSendToAPI,
+          '',
+          temperature,
+        );
         response = gigachatResponse.content;
         tokenUsage = gigachatResponse.tokenUsage;
       } else if (selectedModel.provider === 'openrouter') {
-        const openRouterResponse = await sendOpenRouterMessage(messagesToSendToAPI, '', temperature);
+        const openRouterResponse = await sendOpenRouterMessage(
+          messagesToSendToAPI,
+          '',
+          temperature,
+        );
         response = openRouterResponse.content;
         tokenUsage = openRouterResponse.tokenUsage;
       } else {
@@ -169,7 +309,7 @@ export function Chat() {
           messagesToSendToAPI,
           selectedModel.modelId as HuggingFaceModel,
           '',
-          temperature
+          temperature,
         );
         response = hfResponse.content;
         totalTokens = hfResponse.totalTokens;
@@ -186,20 +326,21 @@ export function Chat() {
         duration,
       };
 
-      const messagesWithAssistant = [...updatedMessages, assistantMessage];
+      const messagesWithAssistant = [...messagesWithTools, assistantMessage];
       setMessages(messagesWithAssistant);
 
-      // Increment assistant response count
       const newCount = assistantResponseCount + 1;
       setAssistantResponseCount(newCount);
 
-      // Check if compression should trigger (every 5 assistant responses)
       if (newCount % 5 === 0) {
         performCompression(messagesWithAssistant);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Произошла ошибка при отправке сообщения');
-      // Удаляем сообщение пользователя при ошибке
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Произошла ошибка при отправке сообщения',
+      );
       setMessages(messages);
     } finally {
       setIsLoading(false);
@@ -584,6 +725,9 @@ export function Chat() {
         tools={mcpTools}
         isLoading={mcpLoading}
         error={mcpError}
+        toolConfigs={mcpToolConfigs}
+        onToggleTool={handleToggleMCPTool}
+        onChangeArg={handleChangeMCPToolArg}
       />
     </div>
   );
