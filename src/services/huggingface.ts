@@ -58,9 +58,19 @@ export async function sendMessage(
   const provider = MODEL_PROVIDERS[model] || 'featherless-ai';
   const modelWithSuffix = `${model}:${provider}`;
 
+  // Добавляем system prompt в начало массива сообщений, если он передан
+  const messagesWithSystem = customSystemPrompt
+    ? [{ role: 'system' as const, content: customSystemPrompt }, ...messages]
+    : messages;
+
+  if (import.meta.env.DEV && customSystemPrompt) {
+    console.log('[HuggingFace] Sending with system prompt, total messages:', messagesWithSystem.length);
+    console.log('[HuggingFace] System prompt length:', customSystemPrompt.length, 'chars');
+  }
+
   const requestBody: HuggingFaceRequest = {
     model: modelWithSuffix,
-    messages: messages,
+    messages: messagesWithSystem,
     temperature,
     stream: false,
   };

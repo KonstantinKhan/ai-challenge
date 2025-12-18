@@ -86,9 +86,19 @@ export async function sendMessage(
 ): Promise<{ content: string; tokenUsage?: TokenUsage }> {
   const accessToken = await getAccessToken();
 
+  // Добавляем system prompt в начало массива сообщений, если он передан
+  const messagesWithSystem = customSystemPrompt
+    ? [{ role: 'system' as const, content: customSystemPrompt }, ...messages]
+    : messages;
+
+  if (import.meta.env.DEV && customSystemPrompt) {
+    console.log('[GigaChat] Sending with system prompt, total messages:', messagesWithSystem.length);
+    console.log('[GigaChat] System prompt length:', customSystemPrompt.length, 'chars');
+  }
+
   const requestBody: ChatRequest = {
     model: 'GigaChat',
-    messages: messages,
+    messages: messagesWithSystem,
     temperature,
   };
 

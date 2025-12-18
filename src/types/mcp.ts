@@ -64,3 +64,37 @@ export interface MCPToolsResponse {
   tools: MCPTool[];
   nextCursor?: string;
 }
+
+/**
+ * MCP Server configuration
+ * Defines connection details for a specific MCP server
+ */
+export interface MCPServerConfig {
+  name: string;           // Unique identifier (e.g., 'local', 'tavily')
+  url: string;            // Full URL to MCP endpoint
+  displayName: string;    // Human-readable name for UI
+  enabled: boolean;       // Whether this server should be connected
+  apiKey?: string;        // Optional API key for Authorization header
+}
+
+/**
+ * MCP Tool with server metadata
+ * Extends MCPTool to include information about which server provides it
+ */
+export interface MCPToolWithServer extends MCPTool {
+  serverName: string;     // Which server provides this tool
+  serverUrl: string;      // Server URL for debugging/logging
+}
+
+/**
+ * Multi-server MCP response
+ * Response structure when fetching tools from multiple MCP servers
+ */
+export interface MultiServerMCPToolsResponse {
+  tools: MCPToolWithServer[];
+  serverStatuses: Record<string, {
+    connected: boolean;
+    error?: string;
+    toolCount: number;
+  }>;
+}

@@ -60,6 +60,34 @@ export default defineConfig({
         target: 'http://localhost:8080',
         changeOrigin: true,
       },
+      '/api/tavily-mcp': {
+        target: 'https://mcp.tavily.com',
+        changeOrigin: true,
+        secure: true,
+        rewrite: (path) => path.replace(/^\/api\/tavily-mcp/, '/mcp'),
+        configure: (proxy, _options) => {
+          proxy.on('proxyReq', (proxyReq, req, _res) => {
+            // For SSE (GET requests)
+            if (req.method === 'GET') {
+              proxyReq.setHeader('Accept', 'text/event-stream');
+              proxyReq.setHeader('Cache-Control', 'no-cache');
+              proxyReq.setHeader('Connection', 'keep-alive');
+            }
+            // Forward Authorization header from client
+            if (req.headers.authorization) {
+              proxyReq.setHeader('Authorization', req.headers.authorization);
+            }
+            // Remove problematic headers
+            proxyReq.removeHeader('origin');
+          });
+          proxy.on('proxyRes', (proxyRes, req, _res) => {
+            // Add CORS headers to response
+            proxyRes.headers['access-control-allow-origin'] = '*';
+            proxyRes.headers['access-control-allow-methods'] = 'GET, POST, DELETE, OPTIONS';
+            proxyRes.headers['access-control-allow-headers'] = 'Content-Type, Accept, Authorization, Mcp-Session-Id';
+          });
+        },
+      },
     },
   },
 })

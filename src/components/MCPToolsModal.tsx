@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react';
-import type { MCPTool, JSONSchemaProperty } from '../types/mcp';
+import type { MCPToolWithServer, JSONSchemaProperty } from '../types/mcp';
 
 interface MCPToolsModalProps {
   isOpen: boolean;
   onClose: () => void;
-  tools: MCPTool[];
+  tools: MCPToolWithServer[];
   isLoading: boolean;
   error: string | null;
 
@@ -15,6 +15,11 @@ interface MCPToolsModalProps {
     }
   >;
   onToggleTool: (toolName: string) => void;
+  serverStatuses?: Record<string, {
+    connected: boolean;
+    error?: string;
+    toolCount: number;
+  }>;
 }
 
 export function MCPToolsModal({
@@ -25,8 +30,9 @@ export function MCPToolsModal({
   error,
   toolConfigs,
   onToggleTool,
+  serverStatuses,
 }: MCPToolsModalProps) {
-  const [selectedTool, setSelectedTool] = useState<MCPTool | null>(null);
+  const [selectedTool, setSelectedTool] = useState<MCPToolWithServer | null>(null);
 
   // Reset selected tool when modal closes
   useEffect(() => {
@@ -78,6 +84,30 @@ export function MCPToolsModal({
           <div className="flex-1 overflow-hidden flex">
             {/* Tools list (left panel) */}
             <div className="w-1/3 border-r border-gray-200 overflow-y-auto">
+              {/* Server Status */}
+              {serverStatuses && Object.keys(serverStatuses).length > 0 && (
+                <div className="p-4 border-b border-gray-200 bg-gray-50">
+                  <h3 className="text-xs font-semibold text-gray-600 mb-2 uppercase">Server Status</h3>
+                  <div className="space-y-1">
+                    {Object.entries(serverStatuses).map(([serverName, status]) => (
+                      <div key={serverName} className="flex items-center gap-2 text-xs">
+                        <div
+                          className={`w-2 h-2 rounded-full ${
+                            status.connected ? 'bg-green-500' : 'bg-red-500'
+                          }`}
+                        />
+                        <span className="font-medium capitalize">
+                          {serverName === 'tavily' ? 'Tavily' : serverName}
+                        </span>
+                        <span className="text-gray-500">
+                          ({status.connected ? `${status.toolCount} tools` : status.error || 'disconnected'})
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {isLoading && (
                 <div className="flex items-center justify-center p-8">
                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
@@ -99,59 +129,90 @@ export function MCPToolsModal({
 
               {!isLoading && !error && tools.length > 0 && (
                 <div className="p-2">
-                  {tools.map((tool) => {
-                    const config =
-                      toolConfigs[tool.name] || {
-                        selected: false,
-                        args: {},
-                      };
-                    const isSelected = config.selected;
-
-                    return (
-                      <div
-                        key={tool.name}
-                        className={`w-full px-4 py-3 rounded-lg mb-2 border-2 transition-colors cursor-pointer ${
-                          selectedTool?.name === tool.name
-                            ? 'bg-blue-100 border-blue-500'
-                            : 'bg-gray-50 hover:bg-gray-100 border-transparent'
-                        }`}
-                        onClick={() => setSelectedTool(tool)}
-                      >
-                        <div className="flex justify-between items-start gap-3">
-                          <div>
-                            <div className="font-medium text-gray-800">
-                              {tool.annotations?.title || tool.name}
-                            </div>
-                            {tool.description && (
-                              <div className="text-sm text-gray-600 mt-1 line-clamp-2">
-                                {tool.description}
-                              </div>
-                            )}
-                          </div>
-
-                          <div className="flex flex-col items-end gap-1">
-                            <label className="flex items-center gap-1 text-xs text-gray-600">
-                              <input
-                                type="checkbox"
-                                className="rounded border-gray-300"
-                                checked={isSelected}
-                                onChange={(e) => {
-                                  e.stopPropagation();
-                                  onToggleTool(tool.name);
-                                }}
-                              />
-                              <span>Use for next message</span>
-                            </label>
-                            {isSelected && (
-                              <span className="text-[10px] text-purple-600 font-semibold">
-                                Selected
-                              </span>
-                            )}
-                          </div>
-                        </div>
+                  {/* Group tools by server */}
+                  {Object.entries(
+                    tools.reduce((acc, tool) => {
+                      if (!acc[tool.serverName]) {
+                        acc[tool.serverName] = [];
+                      }
+                      acc[tool.serverName].push(tool);
+                      return acc;
+                    }, {} as Record<string, MCPToolWithServer[]>)
+                  ).map(([serverName, serverTools]) => (
+                    <div key={serverName} className="mb-4">
+                      {/* Server group header */}
+                      <div className="px-2 py-1 mb-2 bg-gray-100 rounded">
+                        <h4 className="text-xs font-semibold text-gray-600 uppercase">
+                          {serverName === 'tavily' ? 'Web Search (Tavily)' : `${serverName} Tools`}
+                        </h4>
                       </div>
-                    );
-                  })}
+
+                      {/* Tools in this server */}
+                      {serverTools.map((tool) => {
+                        const config =
+                          toolConfigs[tool.name] || {
+                            selected: false,
+                            args: {},
+                          };
+                        const isSelected = config.selected;
+
+                        return (
+                          <div
+                            key={tool.name}
+                            className={`w-full px-4 py-3 rounded-lg mb-2 border-2 transition-colors cursor-pointer ${
+                              selectedTool?.name === tool.name
+                                ? 'bg-blue-100 border-blue-500'
+                                : 'bg-gray-50 hover:bg-gray-100 border-transparent'
+                            }`}
+                            onClick={() => setSelectedTool(tool)}
+                          >
+                            <div className="flex justify-between items-start gap-3">
+                              <div className="flex-1">
+                                <div className="font-medium text-gray-800">
+                                  {tool.annotations?.title || tool.name}
+                                </div>
+                                {tool.description && (
+                                  <div className="text-sm text-gray-600 mt-1 line-clamp-2">
+                                    {tool.description}
+                                  </div>
+                                )}
+                                {/* Server badge */}
+                                <div className="mt-1">
+                                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                                    tool.serverName === 'tavily'
+                                      ? 'bg-purple-100 text-purple-700'
+                                      : 'bg-blue-100 text-blue-700'
+                                  }`}>
+                                    {tool.serverName}
+                                  </span>
+                                </div>
+                              </div>
+
+                              <div className="flex flex-col items-end gap-1">
+                                <label className="flex items-center gap-1 text-xs text-gray-600">
+                                  <input
+                                    type="checkbox"
+                                    className="rounded border-gray-300"
+                                    checked={isSelected}
+                                    onChange={(e) => {
+                                      e.stopPropagation();
+                                      onToggleTool(tool.name);
+                                    }}
+                                  />
+                                  <span>Use</span>
+                                </label>
+                                {isSelected && (
+                                  <span className="text-[10px] text-purple-600 font-semibold">
+                                    Selected
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

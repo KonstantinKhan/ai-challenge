@@ -23,7 +23,7 @@ import { createSummariesConnection } from '../services/summaries';
 import { useAgentTasks } from '../hooks/useAgentTasks';
 import type { ChatMessage, ModelConfig, HuggingFaceModel, TokenUsage } from '../types/gigachat';
 import type { SavedConversation } from '../types/conversation';
-import type { MCPTool } from '../types/mcp';
+import type { MCPToolWithServer } from '../types/mcp';
 import type { TaskSummary } from '../types/summaries';
 
 type MCPToolConfig = {
@@ -46,10 +46,15 @@ export function Chat() {
   const [currentConversationId, setCurrentConversationIdState] = useState<string | null>(null);
   const [isConversationManagerOpen, setIsConversationManagerOpen] = useState(false);
   const [isMCPModalOpen, setIsMCPModalOpen] = useState(false);
-  const [mcpTools, setMcpTools] = useState<MCPTool[]>([]);
+  const [mcpTools, setMcpTools] = useState<MCPToolWithServer[]>([]);
   const [mcpLoading, setMcpLoading] = useState(false);
   const [mcpError, setMcpError] = useState<string | null>(null);
   const [mcpToolConfigs, setMcpToolConfigs] = useState<Record<string, MCPToolConfig>>({});
+  const [mcpServerStatuses, setMcpServerStatuses] = useState<Record<string, {
+    connected: boolean;
+    error?: string;
+    toolCount: number;
+  }>>({});
   const [summaries, setSummaries] = useState<TaskSummary[]>([]);
   const saveTimeoutRef = useRef<number | null>(null);
   const isInitialLoadRef = useRef(true);
@@ -204,7 +209,7 @@ export function Chat() {
   }
 
   // Вспомогательная функция для генерации примеров сообщений пользователя
-  const getExampleUserMessage = (tool: MCPTool): string => {
+  const getExampleUserMessage = (tool: MCPToolWithServer): string => {
     const examples: Record<string, string> = {
       'add_task': 'Добавь задачу: купить молоко',
       'get_pending_tasks': 'Какие у меня есть задачи?',
@@ -213,96 +218,174 @@ export function Chat() {
       'add_task_summary': 'Создай summary: выполнено 3 задачи сегодня',
       'get_undelivered_summaries': 'Покажи непрочитанные summaries',
       'mark_summary_delivered': 'Отметь summary как доставленный',
+      'tavily-search': 'Найди информацию о новых возможностях React 19',
+      'tavily-extract': 'Извлеки данные со страницы документации',
     };
 
     return examples[tool.name] || `Используй инструмент ${tool.name}`;
   };
 
   // Функция для построения system prompt с описанием инструментов
-  const buildSystemPromptWithTools = useCallback((basePrompt: string, tools: MCPTool[]): string => {
+  const buildSystemPromptWithTools = useCallback((basePrompt: string, tools: MCPToolWithServer[]): string => {
     if (tools.length === 0) {
       return basePrompt;
     }
 
-    // 1. Описание инструментов (детальное)
-    const toolsDescription = tools.map((tool, index) => {
-      const required = tool.inputSchema.required || [];
-      const properties = tool.inputSchema.properties || {};
+    // Группируем инструменты по серверам
+    const toolsByServer = tools.reduce((acc, tool) => {
+      if (!acc[tool.serverName]) {
+        acc[tool.serverName] = [];
+      }
+      acc[tool.serverName].push(tool);
+      return acc;
+    }, {} as Record<string, MCPToolWithServer[]>);
 
-      const paramsDesc = Object.entries(properties)
-        .map(([name, schema]) => {
-          const isRequired = required.includes(name);
-          const type = schema.type || 'unknown';
-          const description = schema.description || '';
-          return `    - ${name} (${type}, ${isRequired ? 'обязательный' : 'опциональный'})${description ? ': ' + description : ''}`;
-        })
-        .join('\n');
+    const hasTavily = toolsByServer['tavily']?.length > 0;
+    const hasLocal = toolsByServer['local']?.length > 0;
 
-      const toolDesc = tool.description ? ` - ${tool.description}` : '';
-      return `${index + 1}. ${tool.name}${toolDesc}\n  Параметры:\n${paramsDesc || '    (нет параметров)'}`;
+    // 1. Описание инструментов с группировкой по серверам
+    const toolsDescription = Object.entries(toolsByServer).map(([serverName, serverTools]) => {
+      const serverLabel = serverName === 'tavily' ? 'WEB SEARCH TOOLS (Tavily)' : 'LOCAL TOOLS';
+      const toolsList = serverTools.map((tool, index) => {
+        const required = tool.inputSchema.required || [];
+        const properties = tool.inputSchema.properties || {};
+
+        const paramsDesc = Object.entries(properties)
+          .map(([name, schema]) => {
+            const isRequired = required.includes(name);
+            const type = schema.type || 'unknown';
+            const description = schema.description || '';
+            return `    - ${name} (${type}, ${isRequired ? 'обязательный' : 'опциональный'})${description ? ': ' + description : ''}`;
+          })
+          .join('\n');
+
+        const toolDesc = tool.description ? ` - ${tool.description}` : '';
+        return `${index + 1}. ${tool.name}${toolDesc}\n  Параметры:\n${paramsDesc || '    (нет параметров)'}`;
+      }).join('\n\n');
+
+      return `### ${serverLabel}\n\n${toolsList}`;
     }).join('\n\n');
 
-    // 2. Секция КОГДА использовать инструменты
+    // 2. ПАЙПЛАЙН для работы с Tavily и Local инструментами
+    const pipelineInstructions = hasTavily && hasLocal ? `
+## РАБОЧИЙ ПРОЦЕСС: ПОИСК → АНАЛИЗ И ФОРМИРОВАНИЕ → СОЗДАНИЕ ЗАДАЧ
+
+Когда пользователь просит "Составить список задач по обновлению X до последней версии":
+
+**ШАГ 1: ПОИСК ДОКУМЕНТАЦИИ**
+- Используй tavily_search для получения актуальной документации и информации об изменениях
+- Запроси информацию о миграции, breaking changes, новых возможностях
+
+**ШАГ 2: АНАЛИЗ И ФОРМИРОВАНИЕ ЗАДАЧ**
+- Дождись TOOL_RESULT от tavily_search
+- Проанализируй полученные данные
+- Выдели КЛЮЧЕВЫЕ ИЗМЕНЕНИЯ, которые требуют действий
+- Сформируй конкретные задачи для каждого ключевого изменения
+
+**ШАГ 3: СОЗДАНИЕ ЗАДАЧ В СИСТЕМЕ**
+- Для КАЖДОЙ сформированной задачи вызови add_task
+- Передай четкое описание того, что нужно сделать
+- НЕ создавай задачи до получения и анализа данных от tavily_search!
+
+**ШАГ 4: ИНТЕРПРЕТАЦИЯ РЕЗУЛЬТАТА**
+- После получения TOOL_RESULT от add_task
+- Сообщи пользователю, какие задачи были созданы
+- Укажи основные моменты из документации
+
+**ПРИМЕР ПОЛНОГО ПАЙПЛАЙНА:**
+
+User: "Составь список задач по обновлению React до последней версии"
+
+→ LLM: "Сейчас найду информацию о последней версии React и ключевых изменениях.
+
+TOOL_CALL:
+{"tool": "tavily_search", "arguments": {"query": "React 19 migration guide breaking changes latest 2025"}}
+END_TOOL_CALL"
+
+→ [Ждешь TOOL_RESULT от Tavily с документацией]
+
+→ LLM анализирует: "На основе документации React 19, вижу 3 ключевых изменения:
+1. Новый компилятор React Compiler требует обновления конфигурации
+2. Изменения в API: createRoot заменяет render
+3. Новые хуки: useActionState и useOptimistic
+
+Создаю задачи:
+
+TOOL_CALL:
+{"tool": "add_task", "arguments": {"title": "Установить и настроить React Compiler для автоматической оптимизации"}}
+END_TOOL_CALL
+
+TOOL_CALL:
+{"tool": "add_task", "arguments": {"title": "Заменить ReactDOM.render на ReactDOM.createRoot во всех entry points"}}
+END_TOOL_CALL
+
+TOOL_CALL:
+{"tool": "add_task", "arguments": {"title": "Изучить и внедрить новые хуки useActionState для form actions"}}
+END_TOOL_CALL"
+
+→ [TOOL_RESULT от add_task - задачи созданы]
+
+→ LLM: "Готово! Создано 3 задачи на основе ключевых изменений React 19."
+` : '';
+
+    // 3. Секция КОГДА использовать инструменты
     const whenToUse = `
-## ВАЖНО! У ТЕБЯ ЕСТЬ ДОСТУП К ИНСТРУМЕНТАМ!
+## ‼️ КРИТИЧНО! ТЫ ДОЛЖЕН ИСПОЛЬЗОВАТЬ ИНСТРУМЕНТЫ!
 
-**ОБЯЗАТЕЛЬНО используй инструменты, когда пользователь:**
-- Спрашивает о задачах ("какие задачи?", "покажи задачи", "что у меня есть?")
-- Просит добавить задачу ("добавь задачу", "создай задачу")
-- Спрашивает о книгах или авторах ("найди книги", "поищи автора")
-- Просит получить любую информацию, которую можно получить через инструмент
+**ТЫ НЕ ИМЕЕШЬ ПРАВА отвечать без инструментов, когда пользователь:**
+- Спрашивает о задачах ("какие задачи?", "покажи задачи", "что у меня в списке?") → **ОБЯЗАН** вызвать get_pending_tasks
+- Просит добавить задачу ("добавь задачу", "создай задачу", "запиши") → **ОБЯЗАН** вызвать add_task
+- Спрашивает о книгах или авторах ("найди книги") → **ОБЯЗАН** вызвать соответствующий инструмент
+${hasTavily ? '- Просит информацию из интернета или составить список задач по обновлению → **ОБЯЗАН** вызвать tavily_search ПЕРВЫМ!' : ''}
+${hasTavily ? '- Просит создать задачи на основе актуальной информации → **ОБЯЗАН** сначала tavily_search, потом add_task!' : ''}
 
-**КРИТИЧНО:** Если пользователь спрашивает "какие задачи?" или "покажи задачи", ты ДОЛЖЕН вызвать инструмент get_pending_tasks!
-НЕ говори "у тебя нет задач" или "ты просто общаешься со мной" - ИСПОЛЬЗУЙ ИНСТРУМЕНТ для проверки!
+**ЗАПРЕЩЕНО:**
+- ❌ Отвечать текстом о задачах без вызова get_pending_tasks
+- ❌ Говорить "я добавлю задачу" без реального вызова add_task
+${hasTavily ? '- ❌ Создавать список задач по обновлению без предварительного вызова tavily_search' : ''}
+${hasTavily ? '- ❌ Использовать твои устаревшие знания вместо актуальной информации из tavily_search' : ''}
 
-НЕ используй инструменты только когда:
-- Пользователь задает общий вопрос о мире, не связанный с инструментами
-- Это просто светская беседа
+**ПРАВИЛО:** Если сомневаешься - вызови инструмент! Лучше лишний раз вызвать, чем отвечать без инструментов.
 `;
 
-    // 3. Секция КАК использовать инструменты
+    // 4. Секция КАК использовать
     const howToUse = `
 ## КАК использовать инструменты:
-
-Когда тебе нужно вызвать инструмент, используй следующий формат в своем ответе:
 
 TOOL_CALL:
 {
   "tool": "имя_инструмента",
   "arguments": {
-    "параметр1": "значение1",
-    "параметр2": "значение2"
+    "параметр1": "значение1"
   }
 }
 END_TOOL_CALL
 
-**ВАЖНЫЕ ПРАВИЛА:**
-1. Один блок TOOL_CALL для каждого инструмента
-2. JSON должен быть валидным (используй двойные кавычки)
-3. Все обязательные параметры должны быть заполнены
-4. Извлекай значения параметров из сообщения пользователя
-5. После вызова инструмента НЕ дублируй информацию - жди результат
+**ПРАВИЛА:**
+1. Один блок TOOL_CALL для каждого вызова
+2. Валидный JSON с двойными кавычками
+3. Все обязательные параметры заполнены
+4. Дожидайся TOOL_RESULT перед следующими действиями
+${hasTavily ? '5. При необходимости поиска - СНАЧАЛА tavily-search, ПОТОМ действия' : ''}
 `;
 
-    // 4. Генерация примеров для каждого инструмента
-    const examples = tools.map(tool => {
+    // 5. Примеры с приоритетом для Tavily
+    const examples = tools.slice(0, hasTavily ? 4 : 3).map(tool => {
       const required = tool.inputSchema.required || [];
       const properties = tool.inputSchema.properties || {};
 
-      // Создаем пример аргументов
       const exampleArgs: Record<string, unknown> = {};
       for (const paramName of required) {
         const paramSchema = properties[paramName];
         if (paramSchema) {
-          // Генерируем example значения в зависимости от типа
-          if (paramSchema.type === 'string') {
-            exampleArgs[paramName] = `пример текста для ${paramName}`;
+          if (tool.name === 'tavily-search' && paramName === 'query') {
+            exampleArgs[paramName] = 'React 19 new features and migration guide';
+          } else if (paramSchema.type === 'string') {
+            exampleArgs[paramName] = `пример для ${paramName}`;
           } else if (paramSchema.type === 'number' || paramSchema.type === 'integer') {
             exampleArgs[paramName] = 42;
           } else if (paramSchema.type === 'boolean') {
             exampleArgs[paramName] = true;
-          } else {
-            exampleArgs[paramName] = `значение ${paramName}`;
           }
         }
       }
@@ -310,19 +393,18 @@ END_TOOL_CALL
       const exampleJson = JSON.stringify({ tool: tool.name, arguments: exampleArgs }, null, 2);
       const userMessage = getExampleUserMessage(tool);
 
-      return `Пример вызова "${tool.name}":
-Пользователь: "${userMessage}"
-Твой ответ: "Хорошо, сейчас выполню это действие.
+      return `Пример "${tool.name}" (${tool.serverName}):
+User: "${userMessage}"
+LLM: "Выполняю.
 
 TOOL_CALL:
 ${exampleJson}
 END_TOOL_CALL"`;
     }).join('\n\n');
 
-    // 5. Поддержка множественных вызовов
+    // 6. Множественные вызовы
     const multipleCallsInfo = `
 **Множественные вызовы:**
-Если нужно вызвать несколько инструментов, используй несколько блоков TOOL_CALL:
 
 TOOL_CALL:
 {"tool": "first_tool", "arguments": {...}}
@@ -332,50 +414,43 @@ TOOL_CALL:
 {"tool": "second_tool", "arguments": {...}}
 END_TOOL_CALL
 
-**ВАЖНО: Завершение нескольких задач**
-Инструмент complete_task завершает ОДНУ задачу. Чтобы завершить несколько задач, вызови его несколько раз:
-
-Пользователь: "Заверши задачи 1 и 2"
-Твой ответ: "Хорошо, завершаю обе задачи.
-
-TOOL_CALL:
-{"tool": "complete_task", "arguments": {"task_id": 1}}
-END_TOOL_CALL
-
-TOOL_CALL:
-{"tool": "complete_task", "arguments": {"task_id": 2}}
-END_TOOL_CALL"
-
-**НЕ** придумывай несуществующие инструменты типа "mark_tasks_completed" или "complete_all_tasks" - используй только те инструменты, которые указаны в списке выше!
+**НЕ** придумывай несуществующие инструменты - используй только те, что указаны выше!
 `;
 
     return `${basePrompt}
 
+# ⚠️ ВНИМАНИЕ! У ТЕБЯ ЕСТЬ ДОСТУП К ИНСТРУМЕНТАМ!
+
+Ты ОБЯЗАН использовать инструменты в формате TOOL_CALL, когда пользователь запрашивает действия с задачами, поиск информации или данные из внешних источников.
+
+**НИКОГДА не отвечай текстом вместо вызова инструмента, если инструмент доступен!**
+
 # ДОСТУПНЫЕ ИНСТРУМЕНТЫ
 
-У тебя есть доступ к следующим инструментам:
-
 ${toolsDescription}
+
+${pipelineInstructions}
 
 ${whenToUse}
 
 ${howToUse}
 
-**ПРИМЕРЫ ВЫЗОВОВ:**
+**ПРИМЕРЫ:**
 
 ${examples}
 
 ${multipleCallsInfo}
 
-**ПОМНИ:** После вызова инструмента система автоматически добавит результат в контекст, и ты получишь новый запрос с результатами.
+**ПОМНИ:** Результаты инструментов будут добавлены автоматически как TOOL_RESULT.
 `;
   }, []);
 
   // Функция для парсинга запросов инструментов из ответа LLM
   const parseToolRequests = useCallback((llmResponse: string): ToolCallRequest[] => {
-    // Regex для извлечения блоков TOOL_CALL ... END_TOOL_CALL (или END_TOOLCALL без подчеркивания)
-    // Поддерживает как многострочный, так и однострочный формат
-    const toolCallPattern = /TOOL_?CALL:?\s*([\s\S]*?)\s*END_?TOOL_?CALL/gi;
+    // Regex для извлечения блоков TOOL_CALL ... END_TOOL_CALL
+    // Поддерживает варианты: TOOL_CALL, TOOLCALL, TOOL CALL
+    // И END_TOOL_CALL, END_TOOLCALL, ENDTOOLCALL, END TOOL CALL, END_TOOL CALL
+    const toolCallPattern = /TOOL[\s_]?CALL:?\s*([\s\S]*?)\s*END[\s_]?TOOL[\s_]?CALL/gi;
     const toolCalls: ToolCallRequest[] = [];
     let match;
 
@@ -421,7 +496,7 @@ ${multipleCallsInfo}
   }, []);
 
   // Функция для валидации аргументов инструмента
-  const validateToolArguments = (tool: MCPTool, args: Record<string, unknown>): string | null => {
+  const validateToolArguments = (tool: MCPToolWithServer, args: Record<string, unknown>): string | null => {
     const required = tool.inputSchema.required || [];
     const properties = tool.inputSchema.properties || {};
 
@@ -491,15 +566,15 @@ ${multipleCallsInfo}
       }
 
       // Первый запрос к LLM с описанием инструментов
-      // Добавляем few-shot примеры ТОЛЬКО если есть выбранные инструменты
+      // Добавляем few-shot примеры ВСЕГДА, если есть выбранные инструменты
       let messagesToSendToAPI = getMessagesForAPI(baseMessages);
 
-      if (selectedTools.length > 0 && baseMessages.length === 1) {
-        // Добавляем few-shot примеры в начало (только для первого сообщения в сессии)
+      if (selectedTools.length > 0) {
+        // Базовые примеры для local tools
         const fewShotExamples: ChatMessage[] = [
           {
             role: 'user',
-            content: 'Какие у меня есть задачи?',
+            content: 'Покажи список всех задач',
           },
           {
             role: 'assistant',
@@ -530,6 +605,30 @@ TOOL_CALL:
 END_TOOL_CALL`,
           },
         ];
+
+        // Добавляем пример tavily_search, если он доступен
+        const hasTavily = selectedTools.some(t => t.name === 'tavily_search');
+        if (hasTavily) {
+          fewShotExamples.push(
+            {
+              role: 'user',
+              content: 'Найди информацию о последних изменениях в TypeScript 5.5',
+            },
+            {
+              role: 'assistant',
+              content: `Сейчас найду актуальную информацию.
+
+TOOL_CALL:
+{
+  "tool": "tavily_search",
+  "arguments": {
+    "query": "TypeScript 5.5 new features changes 2025"
+  }
+}
+END_TOOL_CALL`,
+            }
+          );
+        }
 
         // Вставляем few-shot примеры перед реальным сообщением пользователя
         messagesToSendToAPI = [...fewShotExamples, ...messagesToSendToAPI];
@@ -570,15 +669,32 @@ END_TOOL_CALL`,
         firstTotalTokens = hfResponse.totalTokens;
       }
 
-      // Парсим ответ LLM на запросы инструментов (теперь с аргументами)
-      const requestedToolCalls = parseToolRequests(firstResponse);
-      let messagesWithTools = [...baseMessages];
+      // ЦИКЛ вызова инструментов - продолжаем, пока LLM генерирует TOOL_CALL
+      let currentResponse = firstResponse;
+      let currentMessages = [...baseMessages];
       let finalResponse = firstResponse;
       let finalTokenUsage = firstTokenUsage;
       let finalTotalTokens = firstTotalTokens;
 
-      // Если LLM запросила инструменты, вызываем их
-      if (requestedToolCalls.length > 0) {
+      let iteration = 0;
+      const MAX_ITERATIONS = 10; // Защита от бесконечного цикла
+
+      while (iteration < MAX_ITERATIONS) {
+        // Парсим текущий ответ на запросы инструментов
+        const requestedToolCalls = parseToolRequests(currentResponse);
+
+        if (requestedToolCalls.length === 0) {
+          // Нет больше TOOL_CALL - выходим из цикла
+          if (import.meta.env.DEV) {
+            console.log(`[handleSend] No more tool calls found, finishing after ${iteration} iterations`);
+          }
+          break;
+        }
+
+        if (import.meta.env.DEV) {
+          console.log(`[handleSend] Iteration ${iteration + 1}: Processing ${requestedToolCalls.length} tool calls`);
+        }
+
         const toolResults: ChatMessage[] = [];
 
         for (const toolCall of requestedToolCalls) {
@@ -636,18 +752,18 @@ END_TOOL_CALL`,
           }
         }
 
-        // Добавляем результаты инструментов в контекст
-        messagesWithTools = [
-          ...baseMessages,
+        // Добавляем текущий ответ и результаты инструментов в контекст
+        currentMessages = [
+          ...currentMessages,
           {
             role: 'assistant',
-            content: firstResponse,
+            content: currentResponse,
           },
           ...toolResults,
         ];
 
-        // Второй запрос к LLM с результатами инструментов
-        const messagesWithToolResults = getMessagesForAPI(messagesWithTools);
+        // Следующий запрос к LLM с результатами инструментов
+        const messagesWithToolResults = getMessagesForAPI(currentMessages);
 
         if (selectedModel.provider === 'gigachat') {
           const gigachatResponse = await sendGigaChatMessage(
@@ -655,7 +771,7 @@ END_TOOL_CALL`,
             enhancedSystemPrompt,
             temperature,
           );
-          finalResponse = gigachatResponse.content;
+          currentResponse = gigachatResponse.content;
           finalTokenUsage = gigachatResponse.tokenUsage;
         } else if (selectedModel.provider === 'openrouter') {
           const openRouterResponse = await sendOpenRouterMessage(
@@ -663,7 +779,7 @@ END_TOOL_CALL`,
             enhancedSystemPrompt,
             temperature,
           );
-          finalResponse = openRouterResponse.content;
+          currentResponse = openRouterResponse.content;
           finalTokenUsage = openRouterResponse.tokenUsage;
         } else {
           const hfResponse = await sendHuggingFaceMessage(
@@ -672,10 +788,16 @@ END_TOOL_CALL`,
             enhancedSystemPrompt,
             temperature,
           );
-          finalResponse = hfResponse.content;
+          currentResponse = hfResponse.content;
           finalTotalTokens = hfResponse.totalTokens;
         }
+
+        iteration++;
       }
+
+      // Финальный ответ и сообщения
+      finalResponse = currentResponse;
+      const messagesWithTools = currentMessages;
 
       const endTime = performance.now();
       const duration = endTime - startTime;
@@ -815,6 +937,13 @@ END_TOOL_CALL`,
     try {
       const response = await getMCPTools();
       setMcpTools(response.tools);
+      setMcpServerStatuses(response.serverStatuses);
+
+      // Log connection summary
+      const connected = Object.entries(response.serverStatuses)
+        .filter(([_, status]) => status.connected)
+        .map(([name]) => name);
+      console.log('[MCP] Connected servers:', connected.join(', '));
     } catch (error) {
       setMcpError(
         error instanceof Error
@@ -1133,6 +1262,7 @@ END_TOOL_CALL`,
         error={mcpError}
         toolConfigs={mcpToolConfigs}
         onToggleTool={handleToggleMCPTool}
+        serverStatuses={mcpServerStatuses}
       />
     </div>
   );

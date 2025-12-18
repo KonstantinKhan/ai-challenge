@@ -44,9 +44,19 @@ export async function sendMessage(
     throw new Error('VITE_OPENROUTER_API_KEY должна быть установлена в переменных окружения');
   }
 
+  // Добавляем system prompt в начало массива сообщений, если он передан
+  const messagesWithSystem = customSystemPrompt
+    ? [{ role: 'system' as const, content: customSystemPrompt }, ...messages]
+    : messages;
+
+  if (import.meta.env.DEV && customSystemPrompt) {
+    console.log('[OpenRouter] Sending with system prompt, total messages:', messagesWithSystem.length);
+    console.log('[OpenRouter] System prompt length:', customSystemPrompt.length, 'chars');
+  }
+
   const requestBody: OpenRouterRequest = {
     model: MODEL_ID,
-    messages: messages,
+    messages: messagesWithSystem,
     temperature,
   };
 
