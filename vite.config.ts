@@ -52,6 +52,14 @@ export default defineConfig({
           });
         },
       },
+      '/api/summaries': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
+      '/api/agent/tasks': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
     },
   },
 })

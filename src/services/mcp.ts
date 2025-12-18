@@ -6,9 +6,9 @@
  */
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { MCPTool, MCPToolsResponse } from '../types/mcp';
+import { DualChannelTransport } from './mcpTransport.js';
 
 // Singleton pattern for MCP client
 let mcpClient: Client | null = null;
@@ -46,15 +46,11 @@ export async function initMCPClient(): Promise<Client> {
   isConnecting = true;
 
   try {
-    // Create SSE transport (compatible with current Ktor MCP server)
-    // Explicitly set headers to ensure proper SSE connection
-    mcpTransport = new SSEClientTransport(new URL(serverUrl), {
-      eventSourceInit: {
-        // EventSource automatically sets Accept: text/event-stream,
-        // but we can add additional headers if needed
-        withCredentials: false,
-      },
-    });
+    // Create dual-channel transport for Ktor MCP server
+    // This transport uses:
+    // - GET /mcp for SSE connection (receiving responses)
+    // - POST /mcp/messages?sessionId=<id> for sending requests
+    mcpTransport = new DualChannelTransport(new URL(serverUrl));
 
     // Create client with basic configuration
     mcpClient = new Client(

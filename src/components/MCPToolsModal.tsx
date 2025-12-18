@@ -12,11 +12,9 @@ interface MCPToolsModalProps {
     string,
     {
       selected: boolean;
-      args: Record<string, string>;
     }
   >;
   onToggleTool: (toolName: string) => void;
-  onChangeArg: (toolName: string, argName: string, value: string) => void;
 }
 
 export function MCPToolsModal({
@@ -27,7 +25,6 @@ export function MCPToolsModal({
   error,
   toolConfigs,
   onToggleTool,
-  onChangeArg,
 }: MCPToolsModalProps) {
   const [selectedTool, setSelectedTool] = useState<MCPTool | null>(null);
 
@@ -210,84 +207,6 @@ export function MCPToolsModal({
                         </div>
                       </div>
                     )}
-
-                  {/* Input Schema + form */}
-                  <div className="mb-6">
-                    <h4 className="text-sm font-semibold text-gray-700 mb-2">
-                      Input Parameters
-                    </h4>
-                    {selectedTool.inputSchema.properties &&
-                    Object.keys(selectedTool.inputSchema.properties).length >
-                      0 ? (
-                      <div className="space-y-3">
-                        {Object.entries(
-                          selectedTool.inputSchema.properties,
-                        ).map(
-                          ([key, schema]: [string, JSONSchemaProperty]) => {
-                            const isRequired =
-                              selectedTool.inputSchema.required?.includes(
-                                key,
-                              ) ?? false;
-                            const config =
-                              toolConfigs[selectedTool.name] || {
-                                selected: false,
-                                args: {},
-                              };
-                            const value = config.args[key] ?? '';
-
-                            return (
-                              <div
-                                key={key}
-                                className="border border-gray-200 rounded-lg p-3"
-                              >
-                                <div className="flex items-start justify-between mb-1">
-                                  <span className="font-mono text-sm text-gray-800">
-                                    {key}
-                                  </span>
-                                  {isRequired && (
-                                    <span className="text-xs text-red-600 font-semibold">
-                                      required
-                                    </span>
-                                  )}
-                                </div>
-                                {schema.type && (
-                                  <div className="text-xs text-gray-500 mb-1">
-                                    Type: {schema.type}
-                                  </div>
-                                )}
-                                {schema.description && (
-                                  <div className="text-sm text-gray-600 mb-2">
-                                    {schema.description}
-                                  </div>
-                                )}
-                                <input
-                                  type="text"
-                                  value={value}
-                                  onChange={(e) =>
-                                    onChangeArg(
-                                      selectedTool.name,
-                                      key,
-                                      e.target.value,
-                                    )
-                                  }
-                                  className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
-                                  placeholder={
-                                    schema.type
-                                      ? `Value (${schema.type})`
-                                      : 'Value'
-                                  }
-                                />
-                              </div>
-                            );
-                          },
-                        )}
-                      </div>
-                    ) : (
-                      <p className="text-sm text-gray-500">
-                        No parameters required
-                      </p>
-                    )}
-                  </div>
 
                   {/* Output Schema */}
                   {selectedTool.outputSchema && (

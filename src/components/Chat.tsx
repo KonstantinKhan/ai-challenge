@@ -19,13 +19,15 @@ import { ModelSelector } from './ModelSelector';
 import { ConversationManager } from './ConversationManager';
 import { MCPToolsModal } from './MCPToolsModal';
 import { getMCPTools, callMCPTool } from '../services/mcp';
-import type { ChatMessage, ModelConfig, HuggingFaceModel } from '../types/gigachat';
+import { createSummariesConnection } from '../services/summaries';
+import { useAgentTasks } from '../hooks/useAgentTasks';
+import type { ChatMessage, ModelConfig, HuggingFaceModel, TokenUsage } from '../types/gigachat';
 import type { SavedConversation } from '../types/conversation';
 import type { MCPTool } from '../types/mcp';
+import type { TaskSummary } from '../types/summaries';
 
 type MCPToolConfig = {
   selected: boolean;
-  args: Record<string, string>;
 };
 
 export function Chat() {
@@ -48,8 +50,11 @@ export function Chat() {
   const [mcpLoading, setMcpLoading] = useState(false);
   const [mcpError, setMcpError] = useState<string | null>(null);
   const [mcpToolConfigs, setMcpToolConfigs] = useState<Record<string, MCPToolConfig>>({});
+  const [summaries, setSummaries] = useState<TaskSummary[]>([]);
   const saveTimeoutRef = useRef<number | null>(null);
   const isInitialLoadRef = useRef(true);
+  const receivedIdsRef = useRef<Set<string>>(new Set());
+  const summariesConnectionRef = useRef<ReturnType<typeof createSummariesConnection> | null>(null);
 
   const formatDuration = (ms: number): string => {
     if (ms < 1000) {
@@ -139,9 +144,49 @@ export function Chat() {
     };
   }, [messages, systemPrompt, selectedModel, temperature, assistantResponseCount, autoSaveConversation]);
 
+  // SSE соединение для получения summaries
+  useEffect(() => {
+    const connection = createSummariesConnection({
+      onSummary: (id: string, text: string) => {
+        // Дедупликация: проверяем, не получен ли уже summary с таким ID
+        if (receivedIdsRef.current.has(id)) {
+          if (import.meta.env.DEV) {
+            console.debug('[SSE] Duplicate summary ignored:', id);
+          }
+          return;
+        }
+
+        // Добавляем ID в Set для дедупликации
+        receivedIdsRef.current.add(id);
+
+        // Добавляем summary в состояние
+        setSummaries((prev) => [
+          ...prev,
+          {
+            id,
+            text,
+            receivedAt: new Date(),
+          },
+        ]);
+      },
+      onError: (error) => {
+        console.error('[SSE] Connection error:', error);
+        // EventSource автоматически переподключается
+      },
+    });
+
+    summariesConnectionRef.current = connection;
+
+    // Закрываем соединение при размонтировании
+    return () => {
+      connection.close();
+      summariesConnectionRef.current = null;
+    };
+  }, []);
+
   const handleToggleMCPTool = (toolName: string) => {
     setMcpToolConfigs((prev) => {
-      const prevConfig = prev[toolName] || { selected: false, args: {} };
+      const prevConfig = prev[toolName] || { selected: false };
       return {
         ...prev,
         [toolName]: {
@@ -152,24 +197,264 @@ export function Chat() {
     });
   };
 
-  const handleChangeMCPToolArg = (
-    toolName: string,
-    argName: string,
-    value: string,
-  ) => {
-    setMcpToolConfigs((prev) => {
-      const prevConfig = prev[toolName] || { selected: false, args: {} };
-      return {
-        ...prev,
-        [toolName]: {
-          ...prevConfig,
-          args: {
-            ...prevConfig.args,
-            [argName]: value,
-          },
-        },
-      };
-    });
+  // Интерфейс для запроса вызова инструмента (с аргументами)
+  interface ToolCallRequest {
+    tool: string;
+    arguments: Record<string, unknown>;
+  }
+
+  // Вспомогательная функция для генерации примеров сообщений пользователя
+  const getExampleUserMessage = (tool: MCPTool): string => {
+    const examples: Record<string, string> = {
+      'add_task': 'Добавь задачу: купить молоко',
+      'get_pending_tasks': 'Какие у меня есть задачи?',
+      'complete_task': 'Отметь задачу как выполненную',
+      'get_books': 'Найди книги автора Толстой',
+      'add_task_summary': 'Создай summary: выполнено 3 задачи сегодня',
+      'get_undelivered_summaries': 'Покажи непрочитанные summaries',
+      'mark_summary_delivered': 'Отметь summary как доставленный',
+    };
+
+    return examples[tool.name] || `Используй инструмент ${tool.name}`;
+  };
+
+  // Функция для построения system prompt с описанием инструментов
+  const buildSystemPromptWithTools = useCallback((basePrompt: string, tools: MCPTool[]): string => {
+    if (tools.length === 0) {
+      return basePrompt;
+    }
+
+    // 1. Описание инструментов (детальное)
+    const toolsDescription = tools.map((tool, index) => {
+      const required = tool.inputSchema.required || [];
+      const properties = tool.inputSchema.properties || {};
+
+      const paramsDesc = Object.entries(properties)
+        .map(([name, schema]) => {
+          const isRequired = required.includes(name);
+          const type = schema.type || 'unknown';
+          const description = schema.description || '';
+          return `    - ${name} (${type}, ${isRequired ? 'обязательный' : 'опциональный'})${description ? ': ' + description : ''}`;
+        })
+        .join('\n');
+
+      const toolDesc = tool.description ? ` - ${tool.description}` : '';
+      return `${index + 1}. ${tool.name}${toolDesc}\n  Параметры:\n${paramsDesc || '    (нет параметров)'}`;
+    }).join('\n\n');
+
+    // 2. Секция КОГДА использовать инструменты
+    const whenToUse = `
+## ВАЖНО! У ТЕБЯ ЕСТЬ ДОСТУП К ИНСТРУМЕНТАМ!
+
+**ОБЯЗАТЕЛЬНО используй инструменты, когда пользователь:**
+- Спрашивает о задачах ("какие задачи?", "покажи задачи", "что у меня есть?")
+- Просит добавить задачу ("добавь задачу", "создай задачу")
+- Спрашивает о книгах или авторах ("найди книги", "поищи автора")
+- Просит получить любую информацию, которую можно получить через инструмент
+
+**КРИТИЧНО:** Если пользователь спрашивает "какие задачи?" или "покажи задачи", ты ДОЛЖЕН вызвать инструмент get_pending_tasks!
+НЕ говори "у тебя нет задач" или "ты просто общаешься со мной" - ИСПОЛЬЗУЙ ИНСТРУМЕНТ для проверки!
+
+НЕ используй инструменты только когда:
+- Пользователь задает общий вопрос о мире, не связанный с инструментами
+- Это просто светская беседа
+`;
+
+    // 3. Секция КАК использовать инструменты
+    const howToUse = `
+## КАК использовать инструменты:
+
+Когда тебе нужно вызвать инструмент, используй следующий формат в своем ответе:
+
+TOOL_CALL:
+{
+  "tool": "имя_инструмента",
+  "arguments": {
+    "параметр1": "значение1",
+    "параметр2": "значение2"
+  }
+}
+END_TOOL_CALL
+
+**ВАЖНЫЕ ПРАВИЛА:**
+1. Один блок TOOL_CALL для каждого инструмента
+2. JSON должен быть валидным (используй двойные кавычки)
+3. Все обязательные параметры должны быть заполнены
+4. Извлекай значения параметров из сообщения пользователя
+5. После вызова инструмента НЕ дублируй информацию - жди результат
+`;
+
+    // 4. Генерация примеров для каждого инструмента
+    const examples = tools.map(tool => {
+      const required = tool.inputSchema.required || [];
+      const properties = tool.inputSchema.properties || {};
+
+      // Создаем пример аргументов
+      const exampleArgs: Record<string, unknown> = {};
+      for (const paramName of required) {
+        const paramSchema = properties[paramName];
+        if (paramSchema) {
+          // Генерируем example значения в зависимости от типа
+          if (paramSchema.type === 'string') {
+            exampleArgs[paramName] = `пример текста для ${paramName}`;
+          } else if (paramSchema.type === 'number' || paramSchema.type === 'integer') {
+            exampleArgs[paramName] = 42;
+          } else if (paramSchema.type === 'boolean') {
+            exampleArgs[paramName] = true;
+          } else {
+            exampleArgs[paramName] = `значение ${paramName}`;
+          }
+        }
+      }
+
+      const exampleJson = JSON.stringify({ tool: tool.name, arguments: exampleArgs }, null, 2);
+      const userMessage = getExampleUserMessage(tool);
+
+      return `Пример вызова "${tool.name}":
+Пользователь: "${userMessage}"
+Твой ответ: "Хорошо, сейчас выполню это действие.
+
+TOOL_CALL:
+${exampleJson}
+END_TOOL_CALL"`;
+    }).join('\n\n');
+
+    // 5. Поддержка множественных вызовов
+    const multipleCallsInfo = `
+**Множественные вызовы:**
+Если нужно вызвать несколько инструментов, используй несколько блоков TOOL_CALL:
+
+TOOL_CALL:
+{"tool": "first_tool", "arguments": {...}}
+END_TOOL_CALL
+
+TOOL_CALL:
+{"tool": "second_tool", "arguments": {...}}
+END_TOOL_CALL
+
+**ВАЖНО: Завершение нескольких задач**
+Инструмент complete_task завершает ОДНУ задачу. Чтобы завершить несколько задач, вызови его несколько раз:
+
+Пользователь: "Заверши задачи 1 и 2"
+Твой ответ: "Хорошо, завершаю обе задачи.
+
+TOOL_CALL:
+{"tool": "complete_task", "arguments": {"task_id": 1}}
+END_TOOL_CALL
+
+TOOL_CALL:
+{"tool": "complete_task", "arguments": {"task_id": 2}}
+END_TOOL_CALL"
+
+**НЕ** придумывай несуществующие инструменты типа "mark_tasks_completed" или "complete_all_tasks" - используй только те инструменты, которые указаны в списке выше!
+`;
+
+    return `${basePrompt}
+
+# ДОСТУПНЫЕ ИНСТРУМЕНТЫ
+
+У тебя есть доступ к следующим инструментам:
+
+${toolsDescription}
+
+${whenToUse}
+
+${howToUse}
+
+**ПРИМЕРЫ ВЫЗОВОВ:**
+
+${examples}
+
+${multipleCallsInfo}
+
+**ПОМНИ:** После вызова инструмента система автоматически добавит результат в контекст, и ты получишь новый запрос с результатами.
+`;
+  }, []);
+
+  // Функция для парсинга запросов инструментов из ответа LLM
+  const parseToolRequests = useCallback((llmResponse: string): ToolCallRequest[] => {
+    // Regex для извлечения блоков TOOL_CALL ... END_TOOL_CALL (или END_TOOLCALL без подчеркивания)
+    // Поддерживает как многострочный, так и однострочный формат
+    const toolCallPattern = /TOOL_?CALL:?\s*([\s\S]*?)\s*END_?TOOL_?CALL/gi;
+    const toolCalls: ToolCallRequest[] = [];
+    let match;
+
+    while ((match = toolCallPattern.exec(llmResponse)) !== null) {
+      const jsonString = match[1].trim();
+
+      if (import.meta.env.DEV) {
+        console.log('[parseToolRequests] Found TOOL_CALL block, JSON string:', jsonString);
+      }
+
+      try {
+        const parsed = JSON.parse(jsonString);
+
+        if (import.meta.env.DEV) {
+          console.log('[parseToolRequests] Parsed JSON:', parsed);
+        }
+
+        // Валидация структуры
+        if (typeof parsed === 'object' && parsed !== null &&
+            typeof parsed.tool === 'string' &&
+            typeof parsed.arguments === 'object' && parsed.arguments !== null) {
+          toolCalls.push({
+            tool: parsed.tool,
+            arguments: parsed.arguments as Record<string, unknown>,
+          });
+
+          if (import.meta.env.DEV) {
+            console.log('[parseToolRequests] Valid tool call added:', parsed.tool);
+          }
+        } else {
+          console.warn('[parseToolRequests] Invalid tool call structure:', parsed);
+        }
+      } catch (error) {
+        console.warn('[parseToolRequests] Failed to parse tool call JSON:', jsonString, error);
+      }
+    }
+
+    if (import.meta.env.DEV) {
+      console.log('[parseToolRequests] Total tool calls found:', toolCalls.length);
+    }
+
+    return toolCalls;
+  }, []);
+
+  // Функция для валидации аргументов инструмента
+  const validateToolArguments = (tool: MCPTool, args: Record<string, unknown>): string | null => {
+    const required = tool.inputSchema.required || [];
+    const properties = tool.inputSchema.properties || {};
+
+    // Проверка обязательных параметров
+    for (const paramName of required) {
+      if (!(paramName in args) || args[paramName] === undefined || args[paramName] === null) {
+        return `Отсутствует обязательный параметр: ${paramName}`;
+      }
+    }
+
+    // Проверка типов параметров
+    for (const [paramName, value] of Object.entries(args)) {
+      const paramSchema = properties[paramName];
+      if (!paramSchema) {
+        console.warn(`[validateToolArguments] Unknown parameter: ${paramName}`);
+        continue;
+      }
+
+      const expectedType = paramSchema.type;
+      const actualType = typeof value;
+
+      if (expectedType === 'string' && actualType !== 'string') {
+        return `Параметр ${paramName} должен быть string, получен ${actualType}`;
+      }
+      if ((expectedType === 'number' || expectedType === 'integer') && actualType !== 'number') {
+        return `Параметр ${paramName} должен быть number, получен ${actualType}`;
+      }
+      if (expectedType === 'boolean' && actualType !== 'boolean') {
+        return `Параметр ${paramName} должен быть boolean, получен ${actualType}`;
+      }
+    }
+
+    return null; // Все валидно
   };
 
   const handleSend = async (userMessage: string) => {
@@ -187,132 +472,209 @@ export function Chat() {
 
     try {
       const startTime = performance.now();
-      let response: string;
-      let totalTokens: number | undefined;
 
-      let tokenUsage;
-
-      // 1) Вызываем выбранные MCP-инструменты перед запросом к LLM
+      // Получаем выбранные инструменты (только для описания в prompt)
       const selectedTools = mcpTools.filter(
         (tool) => mcpToolConfigs[tool.name]?.selected,
       );
 
-      const messagesWithTools: ChatMessage[] = [...baseMessages];
+      // Строим system prompt с описанием инструментов
+      const enhancedSystemPrompt = buildSystemPromptWithTools(systemPrompt, selectedTools);
 
-      for (const tool of selectedTools) {
-        const config = mcpToolConfigs[tool.name] || {
-          selected: false,
-          args: {},
-        };
-        const rawArgs = config.args || {};
-
-        const required = tool.inputSchema.required || [];
-        const missingRequired = required.filter(
-          (key) => !rawArgs[key] || rawArgs[key].trim() === '',
-        );
-
-        if (missingRequired.length > 0) {
-          const msg = `TOOL: ${tool.name}\n\nERROR: Missing required arguments: ${missingRequired.join(
-            ', ',
-          )}`;
-          messagesWithTools.push({
-            role: 'assistant',
-            content: msg,
-          });
-          continue;
-        }
-
-        const args: Record<string, unknown> = {};
-        const props = tool.inputSchema.properties || {};
-
-        for (const [key, schema] of Object.entries(props)) {
-          const value = rawArgs[key];
-          if (value === undefined || value === '') continue;
-
-          if (schema.type === 'number' || schema.type === 'integer') {
-            const num = Number(value);
-            args[key] = Number.isNaN(num) ? value : num;
-          } else if (schema.type === 'boolean') {
-            const lower = value.toLowerCase();
-            if (lower === 'true' || lower === '1' || lower === 'yes') {
-              args[key] = true;
-            } else if (lower === 'false' || lower === '0' || lower === 'no') {
-              args[key] = false;
-            } else {
-              args[key] = value;
-            }
-          } else {
-            args[key] = value;
-          }
-        }
-
-        try {
-          const rawResult = await callMCPTool(tool.name, args);
-          const prettyJson = JSON.stringify(rawResult, null, 2);
-
-          const toolMessage: ChatMessage = {
-            role: 'assistant',
-            content: [
-              `TOOL: ${tool.name}`,
-              '',
-              'ARGS:',
-              '```json',
-              JSON.stringify(args, null, 2),
-              '```',
-              '',
-              'RESULT (JSON):',
-              '```json',
-              prettyJson,
-              '```',
-            ].join('\n'),
-          };
-
-          messagesWithTools.push(toolMessage);
-        } catch (toolError) {
-          const message =
-            toolError instanceof Error
-              ? toolError.message
-              : `Failed to execute MCP tool "${tool.name}"`;
-
-          const errorMessage: ChatMessage = {
-            role: 'assistant',
-            content: `TOOL: ${tool.name}\n\nERROR: ${message}`,
-          };
-
-          messagesWithTools.push(errorMessage);
+      // Debug: логируем выбранные инструменты и system prompt
+      if (import.meta.env.DEV) {
+        console.log('[handleSend] Selected tools:', selectedTools.map(t => t.name));
+        console.log('[handleSend] Enhanced system prompt length:', enhancedSystemPrompt.length);
+        if (selectedTools.length > 0) {
+          console.log('[handleSend] System prompt preview (first 500 chars):', enhancedSystemPrompt.substring(0, 500));
         }
       }
 
-      setMessages(messagesWithTools);
+      // Первый запрос к LLM с описанием инструментов
+      // Добавляем few-shot примеры ТОЛЬКО если есть выбранные инструменты
+      let messagesToSendToAPI = getMessagesForAPI(baseMessages);
 
-      // Filter messages for API - send compressed version if summary exists
-      const messagesToSendToAPI = getMessagesForAPI(messagesWithTools);
+      if (selectedTools.length > 0 && baseMessages.length === 1) {
+        // Добавляем few-shot примеры в начало (только для первого сообщения в сессии)
+        const fewShotExamples: ChatMessage[] = [
+          {
+            role: 'user',
+            content: 'Какие у меня есть задачи?',
+          },
+          {
+            role: 'assistant',
+            content: `Сейчас проверю твои задачи.
+
+TOOL_CALL:
+{
+  "tool": "get_pending_tasks",
+  "arguments": {}
+}
+END_TOOL_CALL`,
+          },
+          {
+            role: 'user',
+            content: 'Добавь задачу: купить молоко',
+          },
+          {
+            role: 'assistant',
+            content: `Хорошо, добавляю задачу.
+
+TOOL_CALL:
+{
+  "tool": "add_task",
+  "arguments": {
+    "title": "купить молоко"
+  }
+}
+END_TOOL_CALL`,
+          },
+        ];
+
+        // Вставляем few-shot примеры перед реальным сообщением пользователя
+        messagesToSendToAPI = [...fewShotExamples, ...messagesToSendToAPI];
+
+        if (import.meta.env.DEV) {
+          console.log('[handleSend] Added few-shot examples, total messages:', messagesToSendToAPI.length);
+        }
+      }
+
+      let firstResponse: string;
+      let firstTokenUsage: TokenUsage | undefined;
+      let firstTotalTokens: number | undefined;
 
       if (selectedModel.provider === 'gigachat') {
         const gigachatResponse = await sendGigaChatMessage(
           messagesToSendToAPI,
-          '',
+          enhancedSystemPrompt,
           temperature,
         );
-        response = gigachatResponse.content;
-        tokenUsage = gigachatResponse.tokenUsage;
+        firstResponse = gigachatResponse.content;
+        firstTokenUsage = gigachatResponse.tokenUsage;
       } else if (selectedModel.provider === 'openrouter') {
         const openRouterResponse = await sendOpenRouterMessage(
           messagesToSendToAPI,
-          '',
+          enhancedSystemPrompt,
           temperature,
         );
-        response = openRouterResponse.content;
-        tokenUsage = openRouterResponse.tokenUsage;
+        firstResponse = openRouterResponse.content;
+        firstTokenUsage = openRouterResponse.tokenUsage;
       } else {
         const hfResponse = await sendHuggingFaceMessage(
           messagesToSendToAPI,
           selectedModel.modelId as HuggingFaceModel,
-          '',
+          enhancedSystemPrompt,
           temperature,
         );
-        response = hfResponse.content;
-        totalTokens = hfResponse.totalTokens;
+        firstResponse = hfResponse.content;
+        firstTotalTokens = hfResponse.totalTokens;
+      }
+
+      // Парсим ответ LLM на запросы инструментов (теперь с аргументами)
+      const requestedToolCalls = parseToolRequests(firstResponse);
+      let messagesWithTools = [...baseMessages];
+      let finalResponse = firstResponse;
+      let finalTokenUsage = firstTokenUsage;
+      let finalTotalTokens = firstTotalTokens;
+
+      // Если LLM запросила инструменты, вызываем их
+      if (requestedToolCalls.length > 0) {
+        const toolResults: ChatMessage[] = [];
+
+        for (const toolCall of requestedToolCalls) {
+          const tool = selectedTools.find((t) => t.name === toolCall.tool);
+
+          if (!tool) {
+            toolResults.push({
+              role: 'assistant',
+              content: `TOOL_ERROR: ${toolCall.tool}\n\nИнструмент не найден или не активирован. Доступные инструменты: ${selectedTools.map(t => t.name).join(', ')}`,
+            });
+            continue;
+          }
+
+          try {
+            // Валидация аргументов
+            const validationError = validateToolArguments(tool, toolCall.arguments);
+            if (validationError) {
+              toolResults.push({
+                role: 'assistant',
+                content: `TOOL_ERROR: ${tool.name}\n\n${validationError}`,
+              });
+              continue;
+            }
+
+            // Вызов инструмента с уже извлеченными аргументами
+            const rawResult = await callMCPTool(tool.name, toolCall.arguments);
+            const prettyJson = JSON.stringify(rawResult, null, 2);
+
+            toolResults.push({
+              role: 'assistant',
+              content: [
+                `TOOL_RESULT: ${tool.name}`,
+                '',
+                'ARGUMENTS:',
+                '```json',
+                JSON.stringify(toolCall.arguments, null, 2),
+                '```',
+                '',
+                'RESULT:',
+                '```json',
+                prettyJson,
+                '```',
+              ].join('\n'),
+            });
+          } catch (toolError) {
+            const message =
+              toolError instanceof Error
+                ? toolError.message
+                : `Failed to execute MCP tool "${tool.name}"`;
+
+            toolResults.push({
+              role: 'assistant',
+              content: `TOOL_ERROR: ${tool.name}\n\n${message}`,
+            });
+          }
+        }
+
+        // Добавляем результаты инструментов в контекст
+        messagesWithTools = [
+          ...baseMessages,
+          {
+            role: 'assistant',
+            content: firstResponse,
+          },
+          ...toolResults,
+        ];
+
+        // Второй запрос к LLM с результатами инструментов
+        const messagesWithToolResults = getMessagesForAPI(messagesWithTools);
+
+        if (selectedModel.provider === 'gigachat') {
+          const gigachatResponse = await sendGigaChatMessage(
+            messagesWithToolResults,
+            enhancedSystemPrompt,
+            temperature,
+          );
+          finalResponse = gigachatResponse.content;
+          finalTokenUsage = gigachatResponse.tokenUsage;
+        } else if (selectedModel.provider === 'openrouter') {
+          const openRouterResponse = await sendOpenRouterMessage(
+            messagesWithToolResults,
+            enhancedSystemPrompt,
+            temperature,
+          );
+          finalResponse = openRouterResponse.content;
+          finalTokenUsage = openRouterResponse.tokenUsage;
+        } else {
+          const hfResponse = await sendHuggingFaceMessage(
+            messagesWithToolResults,
+            selectedModel.modelId as HuggingFaceModel,
+            enhancedSystemPrompt,
+            temperature,
+          );
+          finalResponse = hfResponse.content;
+          finalTotalTokens = hfResponse.totalTokens;
+        }
       }
 
       const endTime = performance.now();
@@ -320,9 +682,9 @@ export function Chat() {
 
       const assistantMessage: ChatMessage = {
         role: 'assistant',
-        content: response,
-        totalTokens,
-        tokenUsage,
+        content: finalResponse,
+        totalTokens: finalTotalTokens,
+        tokenUsage: finalTokenUsage,
         duration,
       };
 
@@ -371,6 +733,24 @@ export function Chat() {
       // Do nothing - messages remain unchanged
     }
   };
+
+  // Функция для автоматической генерации саммари (вызывается планировщиком)
+  const handleAutoGenerateSummary = useCallback(async () => {
+    console.log('Auto-generating task summary...');
+
+    const summaryPrompt = 'Пожалуйста, проанализируй текущие невыполненные задачи и создай ежедневное саммари.';
+
+    // Используем существующую функцию handleSend
+    await handleSend(summaryPrompt);
+
+    console.log('Auto-summary generation completed');
+  }, [messages, isLoading, mcpTools, mcpToolConfigs, systemPrompt, selectedModel, temperature, assistantResponseCount]);
+
+  // Подключаем hook для автоматической обработки задач от планировщика
+  useAgentTasks({
+    onGenerateSummary: handleAutoGenerateSummary,
+    enabled: true,
+  });
 
   const handleClear = () => {
     setMessages([]);
@@ -502,6 +882,32 @@ export function Chat() {
 
       <div className="flex-1 overflow-y-auto px-4 py-6">
         <div className="max-w-4xl mx-auto space-y-4">
+          {summaries.length > 0 && (
+            <div className="space-y-3 mb-6">
+              <h2 className="text-lg font-semibold text-gray-700">Task Summaries</h2>
+              {summaries.map((summary) => {
+                const timeString = summary.receivedAt.toLocaleTimeString('ru-RU', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  second: '2-digit',
+                });
+                return (
+                  <div
+                    key={summary.id}
+                    className="bg-white border border-gray-200 rounded-lg px-4 py-3 shadow-sm"
+                  >
+                    <div className="flex justify-between items-start mb-2">
+                      <span className="text-xs text-gray-500 font-medium">
+                        {timeString}
+                      </span>
+                    </div>
+                    <p className="text-gray-800 whitespace-pre-wrap">{summary.text}</p>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           {messages.length === 0 && (
             <div className="text-center text-gray-500 mt-20">
               <p className="text-lg">Начните диалог с AI</p>
@@ -727,7 +1133,6 @@ export function Chat() {
         error={mcpError}
         toolConfigs={mcpToolConfigs}
         onToggleTool={handleToggleMCPTool}
-        onChangeArg={handleChangeMCPToolArg}
       />
     </div>
   );
