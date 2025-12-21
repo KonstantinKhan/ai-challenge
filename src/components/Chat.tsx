@@ -266,6 +266,92 @@ export function Chat() {
       return `### ${serverLabel}\n\n${toolsList}`;
     }).join('\n\n');
 
+    // Инструкция по извлечению аргументов
+    const argumentExtractionInstructions = `
+## КАК ИЗВЛЕКАТЬ АРГУМЕНТЫ ИЗ ЗАПРОСА ПОЛЬЗОВАТЕЛЯ
+
+КРИТИЧЕСКИ ВАЖНО: Ты должен внимательно анализировать текст пользователя, чтобы найти и извлечь значения для всех ОБЯЗАТЕЛЬНЫХ аргументов инструмента. Не угадывай значения, а находи их в тексте.
+
+**ПРИМЕР РАБОТЫ:**
+
+1.  **ЗАПРОС ПОЛЬЗОВАТЕЛЯ:** "Запусти, пожалуйста, тесты для проекта mcp-run-tests"
+2.  **ТВОЙ АНАЛИЗ:**
+    *   Пользователь хочет запустить тесты. Для этого подходит инструмент \`run_test\`.
+    *   У инструмента \`run_test\` есть обязательный параметр \`project_name\`.
+    *   В тексте пользователя есть фраза "для проекта mcp-run-tests". Отсюда я могу извлечь имя проекта.
+    *   Имя проекта: "mcp-run-tests".
+3.  **ПРАВИЛЬНЫЙ ВЫЗОВ ИНСТРУМЕНТА:**
+
+    TOOL_CALL:
+    {
+      "tool": "run_test",
+      "arguments": {
+        "project_name": "mcp-run-tests"
+      }
+    }
+    END_TOOL_CALL
+
+**НЕПРАВИЛЬНЫЙ ВЫЗОВ (пропущен обязательный аргумент):**
+
+    TOOL_CALL:
+    {
+      "tool": "run_test",
+      "arguments": {}
+    }
+    END_TOOL_CALL
+
+Этот вызов приведёт к ошибке, так как \`project_name\` не был предоставлен. Всегда ищи значение в запросе пользователя!
+`;
+
+    const resultFormattingInstructions = `
+## ФОРМАТИРОВАНИЕ РЕЗУЛЬТАТОВ ИНСТРУМЕНТОВ
+
+После получения \`TOOL_RESULT\` от инструмента, ты должен представить результат пользователю в четком и информативном виде.
+
+**Особые правила для \`run_test\`:**
+
+Когда ты получаешь успешный \`TOOL_RESULT\` от \`run_test\`, отформатируй свой ответ следующим образом:
+
+1.  **ЗАГОЛОВОК:** Начни с сообщения об успешном прохождении тестов.
+2.  **САММАРИ:** Укажи общее количество пройденных тестов и суммарное время выполнения.
+3.  **СПИСОК ТЕСТОВ:** Выведи список всех тестов, указывая название каждого теста и его статус.
+
+**ПРИМЕР:**
+
+**\`TOOL_RESULT\` который ты получил:**
+\`\`\`json
+{
+  "summary": {
+    "total_tests": 5,
+    "passed": 5,
+    "failed": 0,
+    "total_time_ms": 1234
+  },
+  "tests": [
+    { "name": "test_login_success", "status": "passed", "duration_ms": 200 },
+    { "name": "test_login_failure", "status": "passed", "duration_ms": 300 },
+    { "name": "test_create_post", "status": "passed", "duration_ms": 400 },
+    { "name": "test_delete_post", "status": "passed", "duration_ms": 150 },
+    { "name": "test_logout", "status": "passed", "duration_ms": 184 }
+  ]
+}
+\`\`\`
+
+**ТВОЙ ОТВЕТ ПОЛЬЗОВАТЕЛЮ:**
+
+Тесты для проекта \`mcp-run-tests\` успешно пройдены!
+
+- **Всего пройдено:** 5 тестов
+- **Общее время:** 1.23 сек
+
+**Список тестов:**
+- ✅ test_login_success
+- ✅ test_login_failure
+- ✅ test_create_post
+- ✅ test_delete_post
+- ✅ test_logout
+`;
+
     // 2. ПАЙПЛАЙН для работы с Tavily и Local инструментами
     const pipelineInstructions = hasTavily && hasLocal ? `
 ## РАБОЧИЙ ПРОЦЕСС: ПОИСК → АНАЛИЗ И ФОРМИРОВАНИЕ → СОЗДАНИЕ ЗАДАЧ
@@ -429,6 +515,10 @@ END_TOOL_CALL
 
 ${toolsDescription}
 
+${argumentExtractionInstructions}
+
+${resultFormattingInstructions}
+
 ${pipelineInstructions}
 
 ${whenToUse}
@@ -469,16 +559,30 @@ ${multipleCallsInfo}
         }
 
         // Валидация структуры
-        if (typeof parsed === 'object' && parsed !== null &&
-            typeof parsed.tool === 'string' &&
-            typeof parsed.arguments === 'object' && parsed.arguments !== null) {
-          toolCalls.push({
-            tool: parsed.tool,
-            arguments: parsed.arguments as Record<string, unknown>,
-          });
+        if (typeof parsed === 'object' && parsed !== null && typeof parsed.tool === 'string') {
+          const toolName = parsed.tool;
+          let toolArgs = parsed.arguments;
+
+          // Если arguments отсутствуют, считаем их пустым объектом.
+          if (toolArgs === undefined) {
+            toolArgs = {};
+          }
+
+          // Если arguments есть, но это не объект, это ошибка.
+          if (typeof toolArgs !== 'object' || toolArgs === null) {
+            console.warn(`[parseToolRequests] Invalid 'arguments' for tool '${toolName}'. Expected an object.`, parsed);
+            continue; // Пропускаем этот вызов
+          }
+
+          const newToolCall: ToolCallRequest = {
+            tool: toolName,
+            arguments: toolArgs as Record<string, unknown>,
+          };
+
+          toolCalls.push(newToolCall);
 
           if (import.meta.env.DEV) {
-            console.log('[parseToolRequests] Valid tool call added:', parsed.tool);
+            console.log('[parseToolRequests] Valid tool call added:', toolName);
           }
         } else {
           console.warn('[parseToolRequests] Invalid tool call structure:', parsed);

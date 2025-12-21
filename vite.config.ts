@@ -88,6 +88,27 @@ export default defineConfig({
           });
         },
       },
+      '/api/run-test': {
+        target: 'http://localhost:8081',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/api\/run-test/, ''),
+        configure: (proxy, _options) => {
+          proxy.on('proxyReq', (proxyReq, req, _res) => {
+            if (req.method === 'GET') {
+              proxyReq.setHeader('Accept', 'text/event-stream');
+              proxyReq.setHeader('Cache-Control', 'no-cache');
+              proxyReq.setHeader('Connection', 'keep-alive');
+            }
+            proxyReq.removeHeader('origin');
+          });
+          proxy.on('proxyRes', (proxyRes, req, _res) => {
+            proxyRes.headers['access-control-allow-origin'] = '*';
+            proxyRes.headers['access-control-allow-methods'] = 'GET, POST, DELETE, OPTIONS';
+            proxyRes.headers['access-control-allow-headers'] = 'Content-Type, Accept, Authorization, Mcp-Session-Id';
+          });
+        },
+      },
     },
   },
 })

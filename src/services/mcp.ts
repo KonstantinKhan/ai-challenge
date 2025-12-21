@@ -10,7 +10,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type {
-  MCPTool,
   MCPServerConfig,
   MCPToolWithServer,
   MultiServerMCPToolsResponse
@@ -67,6 +66,17 @@ function getServerConfigs(): MCPServerConfig[] {
   } else {
     console.log('[MCP] Tavily API key NOT found - server will not be configured');
   }
+
+  const runTestUrl = import.meta.env.DEV
+    ? `${window.location.origin}/api/run-test`
+    : 'http://localhost:8081/';
+
+  configs.push({
+    name: 'run-test',
+    url: runTestUrl,
+    displayName: 'run-test',
+    enabled: true,
+  });
 
   return configs;
 }
@@ -188,14 +198,8 @@ export async function initMCPClient(): Promise<{
  * Merges tools and adds server metadata
  */
 export async function getMCPTools(): Promise<MultiServerMCPToolsResponse> {
-  // Initialize all servers if not connected
-  if (mcpServers.size === 0) {
-    await initMCPClient();
-  }
-
-  if (mcpServers.size === 0) {
-    throw new Error('No MCP servers connected');
-  }
+  // Initialize all servers and capture connection status
+  const { failed: failedConnections } = await initMCPClient();
 
   const toolsWithServer: MCPToolWithServer[] = [];
   const serverStatuses: Record<string, {
@@ -204,7 +208,25 @@ export async function getMCPTools(): Promise<MultiServerMCPToolsResponse> {
     toolCount: number;
   }> = {};
 
-  // Fetch tools from each server in parallel
+  // Pre-populate statuses with connection failures
+  failedConnections.forEach(({ name, error }) => {
+    serverStatuses[name] = {
+      connected: false,
+      error: error || 'Failed to connect',
+      toolCount: 0,
+    };
+  });
+
+  // If no servers connected at all, return early
+  if (mcpServers.size === 0) {
+    console.warn('[MCP] No servers connected, returning empty tools list.');
+    return {
+      tools: [],
+      serverStatuses,
+    };
+  }
+
+  // Fetch tools from each successfully connected server
   const fetchResults = await Promise.allSettled(
     Array.from(mcpServers.entries()).map(async ([serverName, connection]) => {
       const result = await connection.client.listTools();
@@ -213,13 +235,10 @@ export async function getMCPTools(): Promise<MultiServerMCPToolsResponse> {
   );
 
   // Process results
-  fetchResults.forEach((result, index) => {
-    const [serverName, connection] = Array.from(mcpServers.entries())[index];
-
+  fetchResults.forEach((result) => {
     if (result.status === 'fulfilled') {
-      const { tools } = result.value;
+      const { serverName, config, tools } = result.value;
 
-      // Transform and tag tools with server info
       const transformedTools: MCPToolWithServer[] = tools.map(tool => ({
         name: tool.name,
         description: tool.description,
@@ -249,22 +268,22 @@ export async function getMCPTools(): Promise<MultiServerMCPToolsResponse> {
           openWorldHint: tool.annotations.openWorldHint,
         } : undefined,
         serverName,
-        serverUrl: connection.config.url,
+        serverUrl: config.url,
       }));
 
       toolsWithServer.push(...transformedTools);
-
       serverStatuses[serverName] = {
         connected: true,
         toolCount: transformedTools.length,
       };
     } else {
-      // Server exists but tool fetch failed
-      serverStatuses[serverName] = {
-        connected: false,
-        error: result.reason?.message || 'Failed to fetch tools',
-        toolCount: 0,
-      };
+      // This case might be redundant if init handles all connection errors,
+      // but it's good for catching tool-listing specific errors.
+      // We need to find the server name for the failed promise.
+      // This is complex as the original array is not directly available.
+      // For now, we log a generic error. The connection error from initMCPClient
+      // should already be in serverStatuses.
+      console.error('[MCP] Error fetching tools from a connected server:', result.reason);
     }
   });
 
