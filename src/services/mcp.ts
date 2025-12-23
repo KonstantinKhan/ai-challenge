@@ -78,6 +78,17 @@ function getServerConfigs(): MCPServerConfig[] {
     enabled: true,
   });
 
+  const ragUrl = import.meta.env.DEV
+    ? `${window.location.origin}/api/rag`
+    : 'http://localhost:8082/';
+
+  configs.push({
+    name: 'rag',
+    url: ragUrl,
+    displayName: 'RAG Search',
+    enabled: true,
+  });
+
   return configs;
 }
 
