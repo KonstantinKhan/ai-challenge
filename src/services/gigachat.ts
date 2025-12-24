@@ -97,7 +97,7 @@ export async function sendMessage(
   }
 
   const requestBody: ChatRequest = {
-    model: 'GigaChat',
+    model: 'GigaChat-Pro',
     messages: messagesWithSystem,
     temperature,
   };

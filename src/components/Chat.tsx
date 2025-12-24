@@ -28,6 +28,7 @@ import type { TaskSummary } from '../types/summaries';
 
 type MCPToolConfig = {
   selected: boolean;
+  args?: Record<string, unknown>;
 };
 
 export function Chat() {
@@ -39,7 +40,7 @@ export function Chat() {
   const [isPromptEditorOpen, setIsPromptEditorOpen] = useState(false);
   const [selectedModel, setSelectedModel] = useState<ModelConfig>({
     provider: 'gigachat',
-    modelId: 'GigaChat',
+    modelId: 'GigaChat-2-Pro',
     displayName: 'GigaChat',
   });
   const [assistantResponseCount, setAssistantResponseCount] = useState<number>(0);
@@ -202,6 +203,19 @@ export function Chat() {
     });
   };
 
+  const handleUpdateToolArgs = (toolName: string, args: Record<string, unknown>) => {
+    setMcpToolConfigs((prev) => {
+      const prevConfig = prev[toolName] || { selected: false, args: {} };
+      return {
+        ...prev,
+        [toolName]: {
+          selected: prevConfig.selected, // Сохраняем состояние selected
+          args: { ...(prevConfig.args || {}), ...args },
+        },
+      };
+    });
+  };
+
   // Интерфейс для запроса вызова инструмента (с аргументами)
   interface ToolCallRequest {
     tool: string;
@@ -220,7 +234,7 @@ export function Chat() {
       'mark_summary_delivered': 'Отметь summary как доставленный',
       'tavily-search': 'Найди информацию о новых возможностях React 19',
       'tavily-extract': 'Извлеки данные со страницы документации',
-      'rag_data': 'Найди в документации информацию о конфигурации Vite',
+      'rag_data': 'Найди информацию о квантовых компьютерах',
       'run_test': 'Запусти тесты для проекта mcp-run-tests',
     };
 
@@ -244,6 +258,7 @@ export function Chat() {
 
     const hasTavily = toolsByServer['tavily']?.length > 0;
     const hasLocal = toolsByServer['local']?.length > 0;
+    const hasRag = tools.some(t => t.name === 'rag_data');
 
     // 1. Описание инструментов с группировкой по серверам
     const toolsDescription = Object.entries(toolsByServer).map(([serverName, serverTools]) => {
@@ -306,19 +321,19 @@ export function Chat() {
 
 **ПРИМЕР РАБОТЫ С RAG_DATA:**
 
-1.  **ЗАПРОС ПОЛЬЗОВАТЕЛЯ:** "Найди в документации как настроить proxy в Vite"
+1.  **ЗАПРОС ПОЛЬЗОВАТЕЛЯ:** "Найди информацию о квантовых компьютерах"
 2.  **ТВОЙ АНАЛИЗ:**
-    *   Пользователь хочет найти информацию в документации. Для этого подходит инструмент \`rag_data\`.
+    *   Пользователь хочет найти информацию. Для этого подходит инструмент \`rag_data\`.
     *   У инструмента \`rag_data\` есть обязательный параметр \`query\`.
     *   Я должен сформулировать поисковый запрос с ключевыми словами.
-    *   Запрос: "Vite proxy configuration setup"
+    *   Запрос: "quantum computers principles applications"
 3.  **ПРАВИЛЬНЫЙ ВЫЗОВ ИНСТРУМЕНТА:**
 
     TOOL_CALL:
     {
       "tool": "rag_data",
       "arguments": {
-        "query": "Vite proxy configuration setup"
+        "query": "quantum computers principles applications"
       }
     }
     END_TOOL_CALL
@@ -327,8 +342,8 @@ export function Chat() {
 - Формулируй запрос в виде ключевых слов или короткого вопроса
 - Используй английский язык для технических терминов
 - Избегай слишком общих запросов - будь конкретным
-- Хороший запрос: "Vite CORS configuration", "MCP tools handling", "Tavily integration example"
-- Плохой запрос: "как работает", "все про Vite", "покажи код"
+- Хороший запрос: "machine learning algorithms", "quantum computing basics", "neural networks architecture"
+- Плохой запрос: "как работает", "все про тему", "покажи информацию"
 `;
 
     const resultFormattingInstructions = `
@@ -488,10 +503,10 @@ END_TOOL_CALL"
 **ТЫ НЕ ИМЕЕШЬ ПРАВА отвечать без инструментов, когда пользователь:**
 - Спрашивает о задачах ("какие задачи?", "покажи задачи", "что у меня в списке?") → **ОБЯЗАН** вызвать get_pending_tasks
 - Просит добавить задачу ("добавь задачу", "создай задачу", "запиши") → **ОБЯЗАН** вызвать add_task
-- **Задает ЛЮБОЙ вопрос со словами "на проекте", "в проекте", "для проекта", "по проекту"** → **ОБЯЗАН СНАЧАЛА** вызвать rag_data
-- **Просит информацию из проектной документации** ("найди в документации", "как настроить", "где в коде") → **ОБЯЗАН** вызвать rag_data
-- **Спрашивает про существующий код, архитектуру, конфигурацию, стратегии, подходы в проекте** → **ОБЯЗАН СНАЧАЛА** вызвать rag_data
-- **Спрашивает "как", "где", "какие", "что" в контексте разработки** → **СНАЧАЛА** rag_data, потом отвечай
+${hasRag ? '- **Задает ЛЮБОЙ вопрос, требующий поиска информации** → **ОБЯЗАН СНАЧАЛА** вызвать rag_data' : '- **Задает ЛЮБОЙ вопрос со словами "на проекте", "в проекте", "для проекта", "по проекту"** → **ОБЯЗАН СНАЧАЛА** вызвать rag_data'}
+${hasRag ? '- **Спрашивает "как", "где", "какие", "что", "почему", "когда"** → **СНАЧАЛА** rag_data, потом отвечай' : '- **Просит информацию из проектной документации** ("найди в документации", "как настроить", "где в коде") → **ОБЯЗАН** вызвать rag_data'}
+${hasRag ? '- **Просит найти информацию на любую тему** → **ОБЯЗАН** вызвать rag_data' : '- **Спрашивает про существующий код, архитектуру, конфигурацию, стратегии, подходы в проекте** → **ОБЯЗАН СНАЧАЛА** вызвать rag_data'}
+${!hasRag ? '- **Спрашивает "как", "где", "какие", "что" в контексте разработки** → **СНАЧАЛА** rag_data, потом отвечай' : ''}
 - Спрашивает о книгах или авторах ("найди книги") → **ОБЯЗАН** вызвать соответствующий инструмент
 ${hasTavily ? '- Просит информацию из интернета или составить список задач по обновлению → **ОБЯЗАН** вызвать tavily_search ПЕРВЫМ!' : ''}
 ${hasTavily ? '- Просит создать задачи на основе актуальной информации → **ОБЯЗАН** сначала tavily_search, потом add_task!' : ''}
@@ -499,17 +514,17 @@ ${hasTavily ? '- Просит создать задачи на основе ак
 **ЗАПРЕЩЕНО:**
 - ❌ Отвечать текстом о задачах без вызова get_pending_tasks
 - ❌ Говорить "я добавлю задачу" без реального вызова add_task
-- **❌ КРИТИЧНО! Отвечать на вопросы про проект из своих знаний - ВСЕГДА сначала rag_data!**
-- **❌ Отвечать "я не имею доступа к проекту" - У ТЕБЯ ЕСТЬ RAG_DATA!**
+${hasRag ? '- **❌ КРИТИЧНО! Отвечать на вопросы, требующие поиска информации, из своих знаний - ВСЕГДА сначала rag_data!**' : '- **❌ КРИТИЧНО! Отвечать на вопросы про проект из своих знаний - ВСЕГДА сначала rag_data!**'}
+${hasRag ? '- **❌ Отвечать "я не знаю" или "я не имею доступа к информации" - У ТЕБЯ ЕСТЬ RAG_DATA!**' : '- **❌ Отвечать "я не имею доступа к проекту" - У ТЕБЯ ЕСТЬ RAG_DATA!**'}
 - **❌ Предлагать "опиши контекст" вместо вызова rag_data**
-- **❌ Говорить про "общий подход" вместо поиска в проектной документации**
+${hasRag ? '- **❌ Говорить про "общий подход" вместо поиска информации через rag_data**' : '- **❌ Говорить про "общий подход" вместо поиска в проектной документации**'}
 - **❌ Угадывать содержимое файлов вместо использования rag_data**
 ${hasTavily ? '- ❌ Создавать список задач по обновлению без предварительного вызова tavily_search' : ''}
 ${hasTavily ? '- ❌ Использовать твои устаревшие знания вместо актуальной информации из tavily_search' : ''}
 
 **ПРАВИЛО:** Если сомневаешься - вызови инструмент! Лучше лишний раз вызвать, чем отвечать без инструментов.
 
-**ВАЖНО для RAG_DATA:** Если пользователь спрашивает про "стратегии на проекте", "подходы в проекте", "как в проекте" - это вопрос к rag_data, НЕ общий вопрос!
+${hasRag ? '**ВАЖНО для RAG_DATA:** Инструмент rag_data доступен для поиска информации на ЛЮБУЮ тему. Используй его для любых вопросов, требующих поиска информации, независимо от темы!' : '**ВАЖНО для RAG_DATA:** Если пользователь спрашивает про "стратегии на проекте", "подходы в проекте", "как в проекте" - это вопрос к rag_data, НЕ общий вопрос!'}
 `;
 
     // 4. Секция КАК использовать
@@ -691,6 +706,15 @@ ${multipleCallsInfo}
 
     // Проверка типов параметров
     for (const [paramName, value] of Object.entries(args)) {
+      // Для rag_data разрешаем параметр use_reranker, даже если его нет в схеме сервера
+      if (tool.name === 'rag_data' && paramName === 'use_reranker') {
+        // Проверяем только тип для use_reranker
+        if (typeof value !== 'boolean') {
+          return `Параметр ${paramName} должен быть boolean, получен ${typeof value}`;
+        }
+        continue; // Пропускаем дальнейшую валидацию для этого параметра
+      }
+      
       const paramSchema = properties[paramName];
       if (!paramSchema) {
         console.warn(`[validateToolArguments] Unknown parameter: ${paramName}`);
@@ -734,6 +758,11 @@ ${multipleCallsInfo}
       const selectedTools = mcpTools.filter(
         (tool) => mcpToolConfigs[tool.name]?.selected,
       );
+      
+      if (import.meta.env.DEV) {
+        console.log('[handleSend] Selected tools:', selectedTools.map(t => t.name));
+        console.log('[handleSend] Tool configs:', mcpToolConfigs);
+      }
 
       // Строим system prompt с описанием инструментов
       const enhancedSystemPrompt = buildSystemPromptWithTools(systemPrompt, selectedTools);
@@ -818,34 +847,34 @@ END_TOOL_CALL`,
           fewShotExamples.push(
             {
               role: 'user',
-              content: 'Как в этом проекте настроен Vite proxy?',
+              content: 'Найди информацию о квантовых компьютерах',
             },
             {
               role: 'assistant',
-              content: `Сейчас найду в документации проекта.
+              content: `Сейчас найду информацию.
 
 TOOL_CALL:
 {
   "tool": "rag_data",
   "arguments": {
-    "query": "Vite proxy configuration"
+    "query": "quantum computers principles applications"
   }
 }
 END_TOOL_CALL`,
             },
             {
               role: 'user',
-              content: 'Какие есть стратегии работы с рисками на проекте?',
+              content: 'Как работает машинное обучение?',
             },
             {
               role: 'assistant',
-              content: `Поищу информацию о стратегиях управления рисками в проектной документации.
+              content: `Поищу информацию о машинном обучении.
 
 TOOL_CALL:
 {
   "tool": "rag_data",
   "arguments": {
-    "query": "risk management strategies project"
+    "query": "machine learning how it works algorithms"
   }
 }
 END_TOOL_CALL`,
@@ -924,16 +953,35 @@ END_TOOL_CALL`,
           const tool = selectedTools.find((t) => t.name === toolCall.tool);
 
           if (!tool) {
+            if (import.meta.env.DEV) {
+              console.warn(`[handleSend] Tool "${toolCall.tool}" not found in selected tools. Available:`, selectedTools.map(t => t.name));
+            }
             toolResults.push({
               role: 'assistant',
               content: `TOOL_ERROR: ${toolCall.tool}\n\nИнструмент не найден или не активирован. Доступные инструменты: ${selectedTools.map(t => t.name).join(', ')}`,
             });
             continue;
           }
+          
+          if (import.meta.env.DEV) {
+            console.log(`[handleSend] Processing tool call for "${tool.name}"`);
+          }
 
           try {
-            // Валидация аргументов
-            const validationError = validateToolArguments(tool, toolCall.arguments);
+            // Объединяем аргументы из конфига с аргументами из AI ответа
+            const toolConfig = mcpToolConfigs[tool.name] || { selected: false, args: {} };
+            
+            // Начинаем с аргументов из AI
+            const mergedArgs = { ...toolCall.arguments };
+            
+            // Для rag_data добавляем use_reranker из конфига, если он задан
+            // (этот параметр не приходит от сервера, но нужен для работы)
+            if (tool.name === 'rag_data' && toolConfig.args?.use_reranker !== undefined) {
+              mergedArgs.use_reranker = toolConfig.args.use_reranker;
+            }
+
+            // Валидация аргументов (пропускаем проверку для use_reranker в rag_data)
+            const validationError = validateToolArguments(tool, mergedArgs);
             if (validationError) {
               toolResults.push({
                 role: 'assistant',
@@ -942,8 +990,11 @@ END_TOOL_CALL`,
               continue;
             }
 
-            // Вызов инструмента с уже извлеченными аргументами
-            const rawResult = await callMCPTool(tool.name, toolCall.arguments);
+            // Вызов инструмента с объединенными аргументами
+            if (import.meta.env.DEV) {
+              console.log(`[handleSend] Calling tool "${tool.name}" with args:`, mergedArgs);
+            }
+            const rawResult = await callMCPTool(tool.name, mergedArgs);
             const prettyJson = JSON.stringify(rawResult, null, 2);
 
             toolResults.push({
@@ -1164,7 +1215,7 @@ END_TOOL_CALL`,
 
       // Log connection summary
       const connected = Object.entries(response.serverStatuses)
-        .filter(([_, status]) => status.connected)
+        .filter(([, status]) => status.connected)
         .map(([name]) => name);
       console.log('[MCP] Connected servers:', connected.join(', '));
     } catch (error) {
@@ -1485,6 +1536,7 @@ END_TOOL_CALL`,
         error={mcpError}
         toolConfigs={mcpToolConfigs}
         onToggleTool={handleToggleMCPTool}
+        onUpdateToolArgs={handleUpdateToolArgs}
         serverStatuses={mcpServerStatuses}
       />
     </div>

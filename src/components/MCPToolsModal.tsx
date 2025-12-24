@@ -12,9 +12,11 @@ interface MCPToolsModalProps {
     string,
     {
       selected: boolean;
+      args?: Record<string, unknown>;
     }
   >;
   onToggleTool: (toolName: string) => void;
+  onUpdateToolArgs?: (toolName: string, args: Record<string, unknown>) => void;
   serverStatuses?: Record<string, {
     connected: boolean;
     error?: string;
@@ -30,6 +32,7 @@ export function MCPToolsModal({
   error,
   toolConfigs,
   onToggleTool,
+  onUpdateToolArgs,
   serverStatuses,
 }: MCPToolsModalProps) {
   const [selectedTool, setSelectedTool] = useState<MCPToolWithServer | null>(null);
@@ -237,6 +240,112 @@ export function MCPToolsModal({
                         Description
                       </h4>
                       <p className="text-gray-600">{selectedTool.description}</p>
+                    </div>
+                  )}
+
+                  {/* Input Schema / Parameters */}
+                  {selectedTool.inputSchema?.properties && (
+                    <div className="mb-6">
+                      <h4 className="text-sm font-semibold text-gray-700 mb-3">
+                        Input Parameters
+                      </h4>
+                      <div className="space-y-4">
+                        {Object.entries(selectedTool.inputSchema.properties).map(([paramName, paramSchema]) => {
+                          const isRequired = selectedTool.inputSchema.required?.includes(paramName) || false;
+                          const paramType = (paramSchema as JSONSchemaProperty).type || 'unknown';
+                          const paramDescription = (paramSchema as JSONSchemaProperty).description || '';
+                          
+                          const config = toolConfigs[selectedTool.name] || { selected: false, args: {} };
+                          const currentValue = config.args?.[paramName] ?? 
+                            (paramType === 'number' ? (paramSchema as any).default || 5 : undefined);
+
+                          return (
+                            <div key={paramName} className="border border-gray-200 rounded-lg p-3 bg-gray-50">
+                              <div className="flex items-start justify-between mb-2">
+                                <div className="flex-1">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-medium text-gray-800">{paramName}</span>
+                                    <span className="text-xs px-2 py-0.5 bg-gray-200 text-gray-600 rounded">
+                                      {paramType}
+                                    </span>
+                                    {isRequired && (
+                                      <span className="text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded">
+                                        required
+                                      </span>
+                                    )}
+                                    {!isRequired && (
+                                      <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded">
+                                        optional
+                                      </span>
+                                    )}
+                                  </div>
+                                  {paramDescription && (
+                                    <p className="text-xs text-gray-600 mt-1">{paramDescription}</p>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Дополнительные параметры для rag_data */}
+                  {selectedTool.name === 'rag_data' && onUpdateToolArgs && (
+                    <div className="mb-6">
+                      <h4 className="text-sm font-semibold text-gray-700 mb-3">
+                        Additional Parameters
+                      </h4>
+                      <div className="border border-gray-200 rounded-lg p-3 bg-gray-50">
+                        <div className="flex items-start justify-between mb-2">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-gray-800">use_reranker</span>
+                              <span className="text-xs px-2 py-0.5 bg-gray-200 text-gray-600 rounded">
+                                boolean
+                              </span>
+                              <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded">
+                                optional
+                              </span>
+                            </div>
+                            <p className="text-xs text-gray-600 mt-1">
+                              Enable reranking for precision (default: false)
+                            </p>
+                          </div>
+                        </div>
+                        
+                        <div className="mt-3 pt-3 border-t border-gray-200">
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={(toolConfigs[selectedTool.name]?.args?.use_reranker as boolean) || false}
+                              onChange={(e) => {
+                                onUpdateToolArgs(selectedTool.name, {
+                                  use_reranker: e.target.checked,
+                                });
+                              }}
+                              className="rounded border-gray-300"
+                            />
+                            <span className="text-sm font-medium text-gray-700">
+                              Use Reranker
+                            </span>
+                          </label>
+                          
+                          {/* Инструкции для use_reranker */}
+                          <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                            <h5 className="text-xs font-semibold text-blue-900 mb-2">
+                              О параметре use_reranker:
+                            </h5>
+                            <ul className="text-xs text-blue-800 space-y-1 list-disc list-inside">
+                              <li>Reranker улучшает точность результатов, но уменьшает их количество</li>
+                              <li>По умолчанию: <code className="bg-blue-100 px-1 rounded">false</code> (случайный результат без reranker)</li>
+                              <li>При <code className="bg-blue-100 px-1 rounded">true</code>: возвращается 1 наиболее релевантный результат с улучшенной точностью</li>
+                              <li>Рекомендуется использовать reranker для точных запросов, когда нужен один лучший результат</li>
+                            </ul>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   )}
 
