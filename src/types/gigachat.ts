@@ -1,3 +1,5 @@
+import type { Tool } from "./tool";
+
 export interface OAuthResponse {
   access_token: string;
   expires_at: number; // unix timestamp в миллисекундах
@@ -15,19 +17,34 @@ export interface ChatMessage {
   content: string;
   totalTokens?: number;
   tokenUsage?: TokenUsage;
-  duration?: number; // длительность выполнения запроса в миллисекундах
+  duration?: number;
+  functions_state_id?: string;
+  attachments?: string[][];
 }
 
 export interface ChatRequest {
-  model: string;
+  model: string; // Модель может быть 'GigaChat', 'GigaChat:latest', 'GigaChat-Pro-preview', и т.д.
   messages: ChatMessage[];
   temperature?: number;
+  functions?: Tool[];
+  top_p?: number;
+  stream?: boolean;
+  max_tokens?: number;
+  repetition_penalty?: number;
+  update_interval?: number;
+  function_call?: 'none' | 'auto' | {
+    name: string;
+  };
 }
 
 export interface ChatChoice {
   message: {
     content: string;
     role: 'assistant';
+    function_call?: {
+      name: string;
+      arguments: string; // JSON строка
+    };
   };
   index: number;
   finish_reason: string;

@@ -1,10 +1,8 @@
 /**
- * MCP (Model Context Protocol) Service - Multi-Server Support
+ * MCP (Model Context Protocol) Service - RAG Server
  *
- * This service manages multiple MCP client connections and provides
- * functions to interact with multiple remote MCP servers.
- *
- * Supports graceful degradation - if one server fails, others continue to work.
+ * This service manages MCP client connection to the RAG server
+ * and provides functions to interact with it.
  */
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -15,7 +13,6 @@ import type {
   MultiServerMCPToolsResponse
 } from '../types/mcp';
 import { DualChannelTransport } from './mcpTransport.js';
-import { StreamableHttpTransport } from './streamableHttpTransport.js';
 
 // Server connection registry (replaces singleton pattern)
 interface ServerConnection {
@@ -33,51 +30,7 @@ const connectingServers = new Set<string>();
 function getServerConfigs(): MCPServerConfig[] {
   const configs: MCPServerConfig[] = [];
 
-  // Primary MCP server (existing local server)
-  const primaryUrl = import.meta.env.VITE_MCP_SERVER_URL;
-  if (primaryUrl) {
-    configs.push({
-      name: 'local',
-      url: primaryUrl,
-      displayName: 'Local MCP Server',
-      enabled: true,
-    });
-  }
-
-  // Tavily MCP server (new web search server)
-  const tavilyApiKey = import.meta.env.VITE_TAWILY_KEY;
-  if (tavilyApiKey) {
-    console.log('[MCP] Tavily API key found:', tavilyApiKey ? 'Yes' : 'No');
-
-    // Use proxy in dev mode to avoid CORS
-    // API key will be sent via Authorization header instead of query parameter
-    const tavilyUrl = import.meta.env.DEV
-      ? `${window.location.origin}/api/tavily-mcp`
-      : `https://mcp.tavily.com/mcp/`;
-
-    console.log('[MCP] Tavily URL will be:', tavilyUrl);
-    configs.push({
-      name: 'tavily',
-      url: tavilyUrl,
-      displayName: 'Tavily Web Search',
-      enabled: true,
-      apiKey: tavilyApiKey, // API key for Authorization header
-    });
-  } else {
-    console.log('[MCP] Tavily API key NOT found - server will not be configured');
-  }
-
-  const runTestUrl = import.meta.env.DEV
-    ? `${window.location.origin}/api/run-test`
-    : 'http://localhost:8081/';
-
-  configs.push({
-    name: 'run-test',
-    url: runTestUrl,
-    displayName: 'run-test',
-    enabled: true,
-  });
-
+  // RAG MCP server (единственный)
   const ragUrl = import.meta.env.DEV
     ? `${window.location.origin}/api/rag`
     : 'http://localhost:8082/';
@@ -112,16 +65,8 @@ async function initMCPServer(config: MCPServerConfig): Promise<Client> {
   connectingServers.add(config.name);
 
   try {
-    // Choose appropriate transport based on server
-    // - Local server uses old dual-channel protocol (HTTP+SSE with endpoint event)
-    // - Tavily uses new Streamable HTTP protocol (2025-06-18)
-    const transport: Transport = config.name === 'tavily'
-      ? new StreamableHttpTransport(new URL(config.url), config.apiKey)
-      : new DualChannelTransport(new URL(config.url));
-
-    if (import.meta.env.DEV) {
-      console.log(`[MCP] Using ${config.name === 'tavily' ? 'StreamableHttpTransport' : 'DualChannelTransport'} for ${config.name}`);
-    }
+    // RAG server uses dual-channel protocol (HTTP+SSE)
+    const transport: Transport = new DualChannelTransport(new URL(config.url));
 
     // Create client with basic configuration
     const client = new Client(
@@ -170,7 +115,7 @@ export async function initMCPClient(): Promise<{
 
   if (configs.length === 0) {
     throw new Error(
-      'No MCP servers configured. Please set VITE_MCP_SERVER_URL or VITE_TAWILY_KEY'
+      'RAG MCP server not configured. Check port 8082'
     );
   }
 
@@ -357,6 +302,16 @@ export async function callMCPTool(
 
     if (import.meta.env.DEV) {
       console.log(`[callMCPTool] Tool "${toolName}" returned:`, result);
+    }
+
+    // Always log the RAG response for debugging purposes
+    if (toolName === 'rag_data') {
+      console.log('[RAG Response] Raw response from server:', result);
+
+      // Additional logging to understand the structure
+      if (result && typeof result === 'object' && 'content' in result) {
+        console.log('[RAG Response] Content array length:', Array.isArray((result as any).content) ? (result as any).content.length : 0);
+      }
     }
 
     return result;

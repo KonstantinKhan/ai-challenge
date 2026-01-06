@@ -279,9 +279,9 @@ export function MCPToolsModal({
                                       </span>
                                     )}
                                   </div>
-                                  {paramDescription && (
-                                    <p className="text-xs text-gray-600 mt-1">{paramDescription}</p>
-                                  )}
+                                  <p className="text-xs text-gray-600 mt-1">
+                                    {paramDescription}
+                                  </p>
                                 </div>
                               </div>
                             </div>
