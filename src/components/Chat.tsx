@@ -19,13 +19,11 @@ import { ModelSelector } from './ModelSelector';
 import { ConversationManager } from './ConversationManager';
 import { MCPToolsModal } from './MCPToolsModal';
 import { getMCPTools, callMCPTool } from '../services/mcp';
-// import { createSummariesConnection } from '../services/summaries';
-// import { useAgentTasks } from '../hooks/useAgentTasks';
 import { convertMCPToolsToGigaChatTools } from '../utils/toolConverter';
+import { parseCommand } from '../utils/commandParser';
 import type { ChatMessage, ModelConfig, HuggingFaceModel, TokenUsage } from '../types/gigachat';
 import type { SavedConversation } from '../types/conversation';
 import type { MCPToolWithServer } from '../types/mcp';
-// import type { TaskSummary } from '../types/summaries';
 
 type MCPToolConfig = {
   selected: boolean;
@@ -57,11 +55,13 @@ export function Chat() {
     error?: string;
     toolCount: number;
   }>>({});
-  // const [summaries, setSummaries] = useState<TaskSummary[]>([]);
+  const [helpModeActive, setHelpModeActive] = useState<boolean>(false);
   const saveTimeoutRef = useRef<number | null>(null);
   const isInitialLoadRef = useRef(true);
-  // const receivedIdsRef = useRef<Set<string>>(new Set());
-  // const summariesConnectionRef = useRef<ReturnType<typeof createSummariesConnection> | null>(null);
+  const helpToolConfigsRef = useRef<Record<string, MCPToolConfig> | null>(null);
+  const helpToolsRef = useRef<MCPToolWithServer[] | null>(null);
+  const helpModeActiveRef = useRef<boolean>(false);
+ 
 
   const formatDuration = (ms: number): string => {
     if (ms < 1000) {
@@ -151,47 +151,6 @@ export function Chat() {
     };
   }, [messages, systemPrompt, selectedModel, temperature, assistantResponseCount, autoSaveConversation]);
 
-  // SSE соединение для получения summaries
-  // Закомментировано, так как сервер на порту 8080 не запущен
-  // useEffect(() => {
-  //   const connection = createSummariesConnection({
-  //     onSummary: (id: string, text: string) => {
-  //       // Дедупликация: проверяем, не получен ли уже summary с таким ID
-  //       if (receivedIdsRef.current.has(id)) {
-  //         if (import.meta.env.DEV) {
-  //           console.debug('[SSE] Duplicate summary ignored:', id);
-  //         }
-  //         return;
-  //       }
-
-  //       // Добавляем ID в Set для дедупликации
-  //       receivedIdsRef.current.add(id);
-
-  //       // Добавляем summary в состояние
-  //       setSummaries((prev) => [
-  //         ...prev,
-  //         {
-  //           id,
-  //           text,
-  //           receivedAt: new Date(),
-  //         },
-  //       ]);
-  //     },
-  //     onError: (error) => {
-  //       console.error('[SSE] Connection error:', error);
-  //       // EventSource автоматически переподключается
-  //     },
-  //   });
-
-  //   summariesConnectionRef.current = connection;
-
-  //   // Закрываем соединение при размонтировании
-  //   return () => {
-  //     connection.close();
-  //     summariesConnectionRef.current = null;
-  //   };
-  // }, []);
-
   const handleToggleMCPTool = (toolName: string) => {
     setMcpToolConfigs((prev) => {
       const prevConfig = prev[toolName] || { selected: false };
@@ -218,17 +177,6 @@ export function Chat() {
     });
   };
 
-  // Интерфейс для запроса вызова инструмента (с аргументами)
-
-  // Вспомогательная функция для генерации примеров сообщений пользователя
-
-  // Функция для построения system prompt с описанием инструментов
-
-  // Функция для парсинга запросов инструментов из ответа LLM
-
-  // Функция для валидации аргументов инструмента
-
-  // Функция для построения минимального system prompt с подсказкой о функциях
   const buildMinimalSystemPrompt = useCallback((basePrompt: string, hasTools: boolean): string => {
     if (!hasTools) {
       return basePrompt;
@@ -298,11 +246,283 @@ export function Chat() {
       return formatted;
     }
 
+    // Special formatting for git_status
+    if (toolName === 'git_status') {
+      // Log git tool result for debugging
+      if (import.meta.env.DEV) {
+        console.log('[Git Tool] Raw result for git_status:', result);
+      }
+
+      // Parse git status result structure
+      const gitResult = result as {
+        branch?: string;
+        staged?: Array<{ path: string; status: string }>;
+        unstaged?: Array<{ path: string; status: string }>;
+        untracked?: string[];
+        diff?: string;
+      };
+
+      let formatted = '';
+
+      // 1. Prominently display current branch
+      if (gitResult.branch) {
+        formatted += `**Текущая ветка:** \`${gitResult.branch}\`\n\n`;
+      }
+
+      // 2. Display file statistics
+      const stagedCount = gitResult.staged?.length || 0;
+      const unstagedCount = gitResult.unstaged?.length || 0;
+      const untrackedCount = gitResult.untracked?.length || 0;
+
+      formatted += `**Статус файлов:**\n`;
+      if (stagedCount > 0) {
+        formatted += `- Staged: ${stagedCount} файл(ов)\n`;
+      }
+      if (unstagedCount > 0) {
+        formatted += `- Unstaged: ${unstagedCount} файл(ов)\n`;
+      }
+      if (untrackedCount > 0) {
+        formatted += `- Untracked: ${untrackedCount} файл(ов)\n`;
+      }
+
+      if (stagedCount === 0 && unstagedCount === 0 && untrackedCount === 0) {
+        formatted += `- Рабочая директория чистая\n`;
+      }
+
+      formatted += `\n`;
+
+      // 3. List staged files if any
+      if (gitResult.staged && gitResult.staged.length > 0) {
+        formatted += `**Staged файлы:**\n`;
+        gitResult.staged.forEach(file => {
+          formatted += `- \`${file.path}\` (${file.status})\n`;
+        });
+        formatted += `\n`;
+      }
+
+      // 4. List unstaged files if any
+      if (gitResult.unstaged && gitResult.unstaged.length > 0) {
+        formatted += `**Unstaged изменения:**\n`;
+        gitResult.unstaged.forEach(file => {
+          formatted += `- \`${file.path}\` (${file.status})\n`;
+        });
+        formatted += `\n`;
+      }
+
+      // 5. List untracked files if any (limit to first 10)
+      if (gitResult.untracked && gitResult.untracked.length > 0) {
+        formatted += `**Untracked файлы:**\n`;
+        const displayCount = Math.min(gitResult.untracked.length, 10);
+        gitResult.untracked.slice(0, displayCount).forEach(file => {
+          formatted += `- \`${file}\`\n`;
+        });
+        if (gitResult.untracked.length > displayCount) {
+          formatted += `... и ещё ${gitResult.untracked.length - displayCount} файл(ов)\n`;
+        }
+        formatted += `\n`;
+      }
+
+      // 6. Include diff if present
+      if (gitResult.diff && gitResult.diff.trim().length > 0) {
+        formatted += `**Diff:**\n\`\`\`diff\n${gitResult.diff}\n\`\`\`\n`;
+      }
+
+      return formatted;
+    }
+
+    // Log other git tools for debugging
+    if (import.meta.env.DEV && toolName.startsWith('git_')) {
+      console.log(`[Git Tool] Raw result for ${toolName}:`, result);
+    }
+
     return `**Результат ${toolName}:**\n\n\`\`\`json\n${JSON.stringify(result, null, 2)}\n\`\`\``;
+  }, []);
+
+  // Helper: Get default repository path for /help command
+  const getDefaultRepositoryPath = useCallback((): string => {
+    return import.meta.env.VITE_DEFAULT_REPO_PATH ||
+           '/Users/khan/Projects/ai-challenge'; // Current working directory
+  }, []);
+
+  // Helper: Disable all tools (cleanup after /help one-time use)
+  const disableAllTools = useCallback(() => {
+    setMcpToolConfigs({});
+  }, []);
+
+  // Helper: Enable all MCP tools for /help mode
+  const enableHelpModeTools = useCallback(async (repositoryPath: string): Promise<{
+    success: boolean;
+    error?: string;
+    toolsEnabled: string[];
+    toolConfigs?: Record<string, MCPToolConfig>;
+    tools?: MCPToolWithServer[];
+  }> => {
+    try {
+      // Fetch tools from all MCP servers
+      const mcpResponse = await getMCPTools();
+
+      if (import.meta.env.DEV) {
+        console.log('[Help Mode] MCP Tools Response:', mcpResponse);
+        console.log('[Help Mode] Server Statuses:', mcpResponse.serverStatuses);
+      }
+
+      // Check if any servers are connected
+      const connectedServers = Object.entries(mcpResponse.serverStatuses)
+        .filter(([_, status]) => status.connected)
+        .map(([name]) => name);
+
+      if (connectedServers.length === 0) {
+        return {
+          success: false,
+          error: 'Cannot connect to MCP servers',
+          toolsEnabled: [],
+        };
+      }
+
+      // Store tools for later use
+      setMcpTools(mcpResponse.tools);
+      setMcpServerStatuses(mcpResponse.serverStatuses);
+
+      // Configure tools: enable all with appropriate arguments
+      const newToolConfigs: Record<string, MCPToolConfig> = {};
+      const toolsEnabled: string[] = [];
+
+      mcpResponse.tools.forEach(tool => {
+        let args: Record<string, unknown> = {};
+
+        // For RAG tools (from rag server), enable reranker
+        if (tool.serverName === 'rag') {
+          args = { use_reranker: true };
+
+          if (import.meta.env.DEV) {
+            console.log(`[Help Mode] Enabling RAG tool: ${tool.name} with use_reranker=true`);
+          }
+        }
+
+        // For Git tools (from git server), set repository path
+        if (tool.serverName === 'git' && tool.inputSchema?.properties) {
+          // Find the parameter that represents the repository path
+          // Look for common names: path, repo, repository, repo_path, directory
+          const pathParamNames = ['path', 'repo', 'repository', 'repo_path', 'directory', 'dir'];
+          const pathParam = Object.keys(tool.inputSchema.properties).find(param =>
+            pathParamNames.some(name => param.toLowerCase().includes(name))
+          );
+
+          if (pathParam) {
+            args = { [pathParam]: repositoryPath };
+
+            if (import.meta.env.DEV) {
+              console.log(`[Help Mode] Enabling Git tool: ${tool.name} with ${pathParam}=${repositoryPath}`);
+            }
+          } else if (import.meta.env.DEV) {
+            console.warn(`[Help Mode] Git tool ${tool.name} has no recognizable path parameter`);
+          }
+        }
+
+        // Enable the tool
+        newToolConfigs[tool.name] = {
+          selected: true,
+          args,
+        };
+
+        toolsEnabled.push(tool.name);
+      });
+
+      // Update tool configurations
+      setMcpToolConfigs(newToolConfigs);
+
+      if (import.meta.env.DEV) {
+        console.log('[Help Mode] Enabled tools:', toolsEnabled);
+        console.log('[Help Mode] Tool configs:', newToolConfigs);
+      }
+
+      return {
+        success: true,
+        toolsEnabled,
+        toolConfigs: newToolConfigs,
+        tools: mcpResponse.tools,
+      };
+
+    } catch (err) {
+      console.error('[Help Mode] Error enabling tools:', err);
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : String(err),
+        toolsEnabled: [],
+      };
+    }
   }, []);
 
   const handleSend = async (userMessage: string) => {
     if (isLoading) return;
+
+    // Command detection and processing
+    const commandResult = parseCommand(userMessage);
+
+    if (commandResult.isCommand && commandResult.commandType === 'help') {
+      const path = commandResult.extractedPath || getDefaultRepositoryPath();
+
+      setIsLoading(true); // Show loading during tool enablement
+      setError(null);
+
+      try {
+        const enableResult = await enableHelpModeTools(path);
+
+        if (!enableResult.success) {
+          setError(enableResult.error || 'Failed to enable help mode tools');
+          setIsLoading(false);
+          return;
+        }
+
+        if (enableResult.toolsEnabled.length === 0) {
+          setError('No tools available for help mode');
+          setIsLoading(false);
+          return;
+        }
+
+        // Mark help mode active for cleanup
+        setHelpModeActive(true);
+        helpModeActiveRef.current = true;
+
+        // Store tool configs and tools in refs for immediate use (bypasses state update queue)
+        const helpToolConfigs = enableResult.toolConfigs || {};
+        const helpTools = enableResult.tools || [];
+        helpToolConfigsRef.current = helpToolConfigs;
+        helpToolsRef.current = helpTools;
+
+        // Log in dev mode
+        if (import.meta.env.DEV) {
+          console.log('[Help Mode] Activated with path:', path);
+          console.log('[Help Mode] Enabled tools:', enableResult.toolsEnabled);
+          console.log('[Help Mode] Tool configs (local):', helpToolConfigs);
+          console.log('[Help Mode] Tools (local):', helpTools.map(t => t.name));
+        }
+
+        // Use stripped message (remove /help prefix)
+        userMessage = commandResult.strippedMessage.trim();
+
+        // If stripped message is empty, show error
+        if (!userMessage) {
+          setError('Please provide a question after /help command');
+          setIsLoading(false);
+          setHelpModeActive(false);
+          helpModeActiveRef.current = false;
+          helpToolConfigsRef.current = null;
+          helpToolsRef.current = null;
+          return;
+        }
+
+      } catch (err) {
+        setError(`Help mode error: ${err instanceof Error ? err.message : String(err)}`);
+        setIsLoading(false);
+        helpModeActiveRef.current = false;
+        helpToolConfigsRef.current = null;
+        helpToolsRef.current = null;
+        return;
+      }
+
+      setIsLoading(false); // Reset before continuing to normal flow
+    }
 
     const newUserMessage: ChatMessage = {
       role: 'user',
@@ -317,14 +537,31 @@ export function Chat() {
     try {
       const startTime = performance.now();
 
+      // Use helpToolConfigsRef and helpToolsRef if available (from /help), otherwise use state
+      const activeToolConfigs = helpToolConfigsRef.current || mcpToolConfigs;
+      const activeTools = helpToolsRef.current || mcpTools;
+
+      if (import.meta.env.DEV) {
+        console.log('[handleSend] DEBUG: mcpTools state:', mcpTools.length);
+        console.log('[handleSend] DEBUG: helpToolsRef.current:', helpToolsRef.current?.length);
+        console.log('[handleSend] DEBUG: activeTools:', activeTools.length);
+        console.log('[handleSend] DEBUG: activeTools names:', activeTools.map(t => t.name));
+        console.log('[handleSend] DEBUG: helpToolConfigsRef.current:', helpToolConfigsRef.current);
+        console.log('[handleSend] DEBUG: mcpToolConfigs state:', mcpToolConfigs);
+        console.log('[handleSend] DEBUG: activeToolConfigs:', activeToolConfigs);
+        console.log('[handleSend] DEBUG: helpModeActive state:', helpModeActive);
+        console.log('[handleSend] DEBUG: helpModeActiveRef:', helpModeActiveRef.current);
+      }
+
       // Получаем выбранные инструменты
-      const selectedTools = mcpTools.filter(
-        (tool) => mcpToolConfigs[tool.name]?.selected,
+      const selectedTools = activeTools.filter(
+        (tool) => activeToolConfigs[tool.name]?.selected,
       );
 
       if (import.meta.env.DEV) {
+        console.log('[handleSend] Active tool configs:', activeToolConfigs);
         console.log('[handleSend] Selected tools:', selectedTools.map(t => t.name));
-        console.log('[handleSend] Tool configs:', mcpToolConfigs);
+        console.log('[handleSend] Using help mode configs:', helpToolConfigsRef.current !== null);
       }
 
       // Конвертируем MCP инструменты в формат GigaChat (только для GigaChat)
@@ -390,31 +627,31 @@ export function Chat() {
           console.log('[handleSend] This suggests GigaChat should handle MCP tools internally, but it returned a function call instead');
         }
 
-        // The ideal scenario is that GigaChat API handles MCP tools internally during the API call
-        // If we receive a function call response, it means the API didn't execute the tool internally
-        // For now, we'll handle it by making the tool call ourselves and returning a proper response
-        // But in a proper MCP integration, this shouldn't happen
-
         try {
-          // Объединяем аргументы из конфига с аргументами из function_call
-          const toolConfig = mcpToolConfigs[functionCallData.name] || { selected: false, args: {} };
-          const mergedArgs = { ...functionCallData.arguments };
+          // Use active tool configs (from ref or state)
+          const activeToolConfigs = helpToolConfigsRef.current || mcpToolConfigs;
 
-          // Для rag_data добавляем query из пользовательского сообщения и use_reranker из конфига
+          // Объединяем аргументы из конфига с аргументами из function_call
+          const toolConfig = activeToolConfigs[functionCallData.name] || { selected: false, args: {} };
+
+          // ✅ Сначала применяем предустановленные аргументы из конфига, затем аргументы от GigaChat
+          const mergedArgs = {
+            ...(toolConfig.args || {}),           // Предустановленные аргументы из /help или ручной настройки
+            ...functionCallData.arguments,        // Динамические аргументы от GigaChat (приоритет)
+          };
+
+          // Для rag_data добавляем query из пользовательского сообщения, если его нет
           if (functionCallData.name === 'rag_data') {
-            // Добавляем оригинальное сообщение пользователя как query, если его нет
             if (!mergedArgs.query) {
               mergedArgs.query = userMessage;
             }
-            // Добавляем use_reranker из конфига, если он задан
-            if (toolConfig.args?.use_reranker !== undefined) {
-              mergedArgs.use_reranker = toolConfig.args.use_reranker;
-            }
           }
 
-          // Вызов инструмента
+          // Логирование для отладки
           if (import.meta.env.DEV) {
-            console.log(`[handleSend] Calling tool "${functionCallData.name}" with args:`, mergedArgs);
+            console.log(`[handleSend] Tool config args:`, toolConfig.args);
+            console.log(`[handleSend] GigaChat function_call args:`, functionCallData.arguments);
+            console.log(`[handleSend] Merged args for "${functionCallData.name}":`, mergedArgs);
           }
 
           const toolResult = await callMCPTool(functionCallData.name, mergedArgs);
@@ -459,12 +696,6 @@ export function Chat() {
             }
           }
 
-          // For proper MCP integration, the GigaChat API should handle the tool execution internally
-          // Since it's returning a function call, we need to make a second request to get the final response
-          // This is not ideal but may be how the current GigaChat API implementation works
-
-          // Create a function result message (standard format for LLM APIs)
-          // GigaChat API doesn't support 'function' role, so we use 'user' instead
           const functionResultMessage: ChatMessage = {
             role: 'user',
             content: `[Результат выполнения функции "${functionCallData.name}"]\n\n${formatToolResult(functionCallData.name, mergedArgs, processedResult)}`,
@@ -480,11 +711,12 @@ export function Chat() {
 
           // Make a second request to get the final response incorporating the function result
           // Send full context instead of slice(-10) to avoid losing important information
+          // Pass tools again to allow additional tool calls if needed
           const finalResponse = await sendGigaChatMessage(
             messagesWithFunctionResult,
             enhancedSystemPrompt,
             temperature,
-            undefined, // Don't pass tools again
+            gigaChatTools, // ✅ Pass tools again for potential additional calls
           );
 
           assistantResponse = finalResponse.content;
@@ -492,6 +724,89 @@ export function Chat() {
 
           if (import.meta.env.DEV) {
             console.log('[handleSend] Final response after function execution received');
+            if (finalResponse.function_call) {
+              console.log('[handleSend] Additional function call received:', finalResponse.function_call);
+            }
+          }
+
+          // In help mode, force call all remaining tools even if GigaChat doesn't request them
+          let forcedToolCall: { name: string; arguments: Record<string, unknown> } | null = null;
+
+          if (helpModeActiveRef.current && !finalResponse.function_call) {
+            // Find tools that haven't been called yet
+            const calledToolName = functionCallData.name;
+            const remainingTools = selectedTools.filter(tool =>
+              tool.name !== calledToolName && activeToolConfigs[tool.name]?.selected
+            );
+
+            if (remainingTools.length > 0) {
+              // Force call the first remaining tool (usually rag_data)
+              const toolToCall = remainingTools[0];
+              forcedToolCall = {
+                name: toolToCall.name,
+                arguments: activeToolConfigs[toolToCall.name]?.args || {},
+              };
+
+              if (import.meta.env.DEV) {
+                console.log('[Help Mode] Forcing call to remaining tool:', forcedToolCall);
+              }
+            }
+          }
+
+          // Handle additional function call if present (e.g., rag_data after git_status)
+          // OR forced tool call in help mode
+          if (finalResponse.function_call || forcedToolCall) {
+            const secondFunctionCall = finalResponse.function_call || forcedToolCall!;
+
+            try {
+              // Merge arguments for second tool
+              const secondToolConfig = activeToolConfigs[secondFunctionCall.name] || { selected: false, args: {} };
+              const secondMergedArgs = {
+                ...(secondToolConfig.args || {}),
+                ...secondFunctionCall.arguments,
+              };
+
+              if (secondFunctionCall.name === 'rag_data' && !secondMergedArgs.query) {
+                secondMergedArgs.query = userMessage;
+              }
+
+              if (import.meta.env.DEV) {
+                console.log(`[handleSend] Executing second tool "${secondFunctionCall.name}" with args:`, secondMergedArgs);
+              }
+
+              const secondToolResult = await callMCPTool(secondFunctionCall.name, secondMergedArgs);
+
+              const secondFunctionResultMessage: ChatMessage = {
+                role: 'user',
+                content: `[Результат выполнения функции "${secondFunctionCall.name}"]\n\n${formatToolResult(secondFunctionCall.name, secondMergedArgs, secondToolResult)}`,
+              };
+
+              // Create conversation with both tool results
+              const messagesWithBothResults = [...messagesWithFunctionResult, {
+                role: 'assistant' as const,
+                content: assistantResponse,
+                tokenUsage,
+                duration: performance.now() - startTime,
+              }, secondFunctionResultMessage];
+
+              // Final request with both tool results (no tools this time)
+              const finalFinalResponse = await sendGigaChatMessage(
+                messagesWithBothResults,
+                enhancedSystemPrompt,
+                temperature,
+                undefined, // No more tools after second call
+              );
+
+              assistantResponse = finalFinalResponse.content;
+              tokenUsage = finalFinalResponse.tokenUsage;
+
+              if (import.meta.env.DEV) {
+                console.log('[handleSend] Final response after second function execution received');
+              }
+            } catch (secondToolError) {
+              console.error('[handleSend] Error executing second tool:', secondToolError);
+              // Continue with previous response
+            }
           }
         } catch (toolError) {
           console.error('[handleSend] Error executing tool:', toolError);
@@ -528,6 +843,19 @@ export function Chat() {
       if (newCount % 5 === 0) {
         performCompression(messagesWithAssistant);
       }
+
+      // Cleanup help mode tools (one-time use)
+      if (helpModeActiveRef.current) {
+        disableAllTools();
+        setHelpModeActive(false);
+        helpModeActiveRef.current = false;
+        helpToolConfigsRef.current = null;
+        helpToolsRef.current = null;
+
+        if (import.meta.env.DEV) {
+          console.log('[Help Mode] Tools disabled after one-time use');
+        }
+      }
     } catch (err) {
       setError(
         err instanceof Error
@@ -535,6 +863,15 @@ export function Chat() {
           : 'Произошла ошибка при отправке сообщения',
       );
       setMessages(messages);
+
+      // Cleanup help mode on error
+      if (helpModeActiveRef.current) {
+        disableAllTools();
+        setHelpModeActive(false);
+        helpModeActiveRef.current = false;
+        helpToolConfigsRef.current = null;
+        helpToolsRef.current = null;
+      }
     } finally {
       setIsLoading(false);
     }
@@ -564,26 +901,6 @@ export function Chat() {
       // Do nothing - messages remain unchanged
     }
   };
-
-  // Функция для автоматической генерации саммари (вызывается планировщиком)
-  // Закомментировано, так как сервер на порту 8080 не запущен
-  // const handleAutoGenerateSummary = useCallback(async () => {
-  //   console.log('Auto-generating task summary...');
-
-  //   const summaryPrompt = 'Пожалуйста, проанализируй текущие невыполненные задачи и создай ежедневное саммари.';
-
-  //   // Используем существующую функцию handleSend
-  //   await handleSend(summaryPrompt);
-
-  //   console.log('Auto-summary generation completed');
-  // }, [messages, isLoading, mcpTools, mcpToolConfigs, systemPrompt, selectedModel, temperature, assistantResponseCount]);
-
-  // Подключаем hook для автоматической обработки задач от планировщика
-  // Закомментировано, так как сервер на порту 8080 не запущен
-  // useAgentTasks({
-  //   onGenerateSummary: handleAutoGenerateSummary,
-  //   enabled: true,
-  // });
 
   const handleClear = () => {
     setMessages([]);
@@ -722,32 +1039,6 @@ export function Chat() {
 
       <div className="flex-1 overflow-y-auto px-4 py-6">
         <div className="max-w-4xl mx-auto space-y-4">
-          {/* {summaries.length > 0 && (
-            <div className="space-y-3 mb-6">
-              <h2 className="text-lg font-semibold text-gray-700">Task Summaries</h2>
-              {summaries.map((summary) => {
-                const timeString = summary.receivedAt.toLocaleTimeString('ru-RU', {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                  second: '2-digit',
-                });
-                return (
-                  <div
-                    key={summary.id}
-                    className="bg-white border border-gray-200 rounded-lg px-4 py-3 shadow-sm"
-                  >
-                    <div className="flex justify-between items-start mb-2">
-                      <span className="text-xs text-gray-500 font-medium">
-                        {timeString}
-                      </span>
-                    </div>
-                    <p className="text-gray-800 whitespace-pre-wrap">{summary.text}</p>
-                  </div>
-                );
-              })}
-            </div>
-          )} */}
-
           {messages.length === 0 && (
             <div className="text-center text-gray-500 mt-20">
               <p className="text-lg">Начните диалог с AI</p>
@@ -979,6 +1270,3 @@ export function Chat() {
     </div>
   );
 }
-
-
-

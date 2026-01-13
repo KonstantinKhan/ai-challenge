@@ -1,11 +1,3 @@
-/**
- * Custom MCP Transport for Dual-Channel Architecture
- * 
- * This transport implements the dual-channel pattern:
- * - GET /mcp: SSE connection for receiving server responses
- * - POST /mcp/messages?sessionId=<id>: Sending JSON-RPC requests
- */
-
 import type { Transport, TransportSendOptions } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { JSONRPCMessage, MessageExtraInfo } from '@modelcontextprotocol/sdk/types.js';
 

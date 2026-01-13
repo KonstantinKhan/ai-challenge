@@ -1,10 +1,3 @@
-/**
- * MCP (Model Context Protocol) Service - RAG Server
- *
- * This service manages MCP client connection to the RAG server
- * and provides functions to interact with it.
- */
-
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type {
@@ -30,7 +23,7 @@ const connectingServers = new Set<string>();
 function getServerConfigs(): MCPServerConfig[] {
   const configs: MCPServerConfig[] = [];
 
-  // RAG MCP server (единственный)
+  // RAG MCP server
   const ragUrl = import.meta.env.DEV
     ? `${window.location.origin}/api/rag`
     : 'http://localhost:8082/';
@@ -39,6 +32,18 @@ function getServerConfigs(): MCPServerConfig[] {
     name: 'rag',
     url: ragUrl,
     displayName: 'RAG Search',
+    enabled: true,
+  });
+
+  // Git MCP server
+  const gitUrl = import.meta.env.DEV
+    ? `${window.location.origin}/api/git`
+    : 'http://localhost:8085/';
+
+  configs.push({
+    name: 'git',
+    url: gitUrl,
+    displayName: 'Git Operations',
     enabled: true,
   });
 
