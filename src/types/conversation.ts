@@ -10,4 +10,5 @@ export interface SavedConversation {
   modelConfig: ModelConfig;
   temperature: number;
   assistantResponseCount: number;
+  selectedUserId: number;
 }

@@ -16,6 +16,7 @@ import { MessageInput } from './MessageInput';
 import { PromptEditor } from './PromptEditor';
 import { TemperatureSlider } from './TemperatureSlider';
 import { ModelSelector } from './ModelSelector';
+import { UserIdSelector } from './UserIdSelector';
 import { ConversationManager } from './ConversationManager';
 import { MCPToolsModal } from './MCPToolsModal';
 import { getMCPTools, callMCPTool } from '../services/mcp';
@@ -44,6 +45,7 @@ export function Chat() {
   });
   const [assistantResponseCount, setAssistantResponseCount] = useState<number>(0);
   const [currentConversationId, setCurrentConversationIdState] = useState<string | null>(null);
+  const [selectedUserId, setSelectedUserId] = useState<number>(101);
   const [isConversationManagerOpen, setIsConversationManagerOpen] = useState(false);
   const [isMCPModalOpen, setIsMCPModalOpen] = useState(false);
   const [mcpTools, setMcpTools] = useState<MCPToolWithServer[]>([]);
@@ -96,6 +98,7 @@ export function Chat() {
           modelConfig: selectedModel,
           temperature,
           assistantResponseCount,
+          selectedUserId,
         };
 
         // Если нет ID, создаем новый диалог
@@ -116,7 +119,7 @@ export function Chat() {
         console.error('Ошибка при автосохранении диалога:', error);
       }
     }, 500);
-  }, [messages, systemPrompt, selectedModel, temperature, assistantResponseCount, currentConversationId]);
+  }, [messages, systemPrompt, selectedModel, temperature, assistantResponseCount, selectedUserId, currentConversationId]);
 
   // Загрузка диалога при монтировании
   useEffect(() => {
@@ -132,6 +135,7 @@ export function Chat() {
           setSelectedModel(savedConversation.modelConfig);
           setTemperature(savedConversation.temperature);
           setAssistantResponseCount(savedConversation.assistantResponseCount);
+          setSelectedUserId(savedConversation.selectedUserId || 101);
           setCurrentConversationIdState(savedConversation.id);
         }
       }
@@ -143,13 +147,13 @@ export function Chat() {
     if (!isInitialLoadRef.current) {
       autoSaveConversation();
     }
-    
+
     return () => {
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
       }
     };
-  }, [messages, systemPrompt, selectedModel, temperature, assistantResponseCount, autoSaveConversation]);
+  }, [messages, systemPrompt, selectedModel, temperature, assistantResponseCount, selectedUserId, autoSaveConversation]);
 
   const handleToggleMCPTool = (toolName: string) => {
     setMcpToolConfigs((prev) => {
@@ -338,6 +342,134 @@ export function Chat() {
     return `**Результат ${toolName}:**\n\n\`\`\`json\n${JSON.stringify(result, null, 2)}\n\`\`\``;
   }, []);
 
+  // Build enhanced system prompt with aggregated tool data
+  const buildEnhancedSystemPromptWithToolData = useCallback((
+    basePrompt: string,
+    aggregatedResults: {
+      rag_results?: Array<{ toolName: string; content: unknown; serverUrl: string }>;
+      other_results: Array<{ toolName: string; result: unknown; serverUrl: string }>;
+    }
+  ): string => {
+    // Start with base instruction in English
+    let enhancedPrompt = basePrompt || '';
+
+    // Add base instruction for using tool data
+    enhancedPrompt += '\n\nYou are an assistant who answers user questions based on user data and information obtained from RAG.\n\n';
+
+    // Helper function to extract text content from tool results (similar to formatToolResult)
+    const extractToolContent = (toolName: string, result: unknown): string => {
+      // RAG data extraction
+      if (toolName.includes('rag_data') || toolName.startsWith('rag_')) {
+        let contentText = '';
+
+        if (result && typeof result === 'object' && 'content' in result) {
+          const resultObj = result as { content: Array<{ type: string; text: string }> };
+
+          if (Array.isArray(resultObj.content) && resultObj.content.length > 0) {
+            contentText = resultObj.content
+              .filter(item => item.type === 'text')
+              .map(item => item.text)
+              .join('\n\n');
+          } else {
+            contentText = JSON.stringify(result, null, 2);
+          }
+        } else {
+          contentText = JSON.stringify(result, null, 2);
+        }
+
+        return contentText;
+      }
+
+      // Git tool data extraction
+      if (toolName.startsWith('git_')) {
+        const gitResult = result as {
+          branch?: string;
+          staged?: Array<{ path: string; status: string }>;
+          unstaged?: Array<{ path: string; status: string }>;
+          untracked?: string[];
+          diff?: string;
+        };
+
+        let formatted = '';
+
+        if (gitResult.branch) {
+          formatted += `Current branch: ${gitResult.branch}\n`;
+        }
+
+        const stagedCount = gitResult.staged?.length || 0;
+        const unstagedCount = gitResult.unstaged?.length || 0;
+        const untrackedCount = gitResult.untracked?.length || 0;
+
+        if (stagedCount > 0 || unstagedCount > 0 || untrackedCount > 0) {
+          formatted += `File status: ${stagedCount} staged, ${unstagedCount} unstaged, ${untrackedCount} untracked\n`;
+        }
+
+        if (gitResult.staged && gitResult.staged.length > 0) {
+          formatted += '\nStaged files:\n';
+          gitResult.staged.forEach(file => {
+            formatted += `- ${file.path} (${file.status})\n`;
+          });
+        }
+
+        if (gitResult.unstaged && gitResult.unstaged.length > 0) {
+          formatted += '\nUnstaged changes:\n';
+          gitResult.unstaged.forEach(file => {
+            formatted += `- ${file.path} (${file.status})\n`;
+          });
+        }
+
+        if (gitResult.diff && gitResult.diff.trim().length > 0) {
+          formatted += `\nDiff:\n${gitResult.diff}\n`;
+        }
+
+        return formatted;
+      }
+
+      // Generic tool data
+      return JSON.stringify(result, null, 2);
+    };
+
+    // Add RAG data section if present
+    if (aggregatedResults.rag_results && aggregatedResults.rag_results.length > 0) {
+      enhancedPrompt += '## Information from RAG:\n\n';
+
+      aggregatedResults.rag_results.forEach(({ toolName, content }) => {
+        const extracted = extractToolContent(toolName, content);
+        // Truncate if too long (max 5000 chars per tool)
+        const truncated = extracted.length > 5000
+          ? extracted.substring(0, 5000) + '\n... (truncated)'
+          : extracted;
+
+        enhancedPrompt += `${truncated}\n\n`;
+      });
+    }
+
+    // Add other tool data sections
+    if (aggregatedResults.other_results.length > 0) {
+      aggregatedResults.other_results.forEach(({ toolName, result }) => {
+        enhancedPrompt += `## Data from ${toolName}:\n\n`;
+
+        const extracted = extractToolContent(toolName, result);
+        // Truncate if too long (max 5000 chars per tool)
+        const truncated = extracted.length > 5000
+          ? extracted.substring(0, 5000) + '\n... (truncated)'
+          : extracted;
+
+        enhancedPrompt += `${truncated}\n\n`;
+      });
+    }
+
+    // Add instruction to cite sources and use provided data
+    enhancedPrompt += 'IMPORTANT: Use the information provided above to answer the user\'s question. Always cite your sources (files, line numbers, etc.) when referencing information from the tools.\n';
+
+    if (import.meta.env.DEV) {
+      console.log('[Enhanced System Prompt] Length:', enhancedPrompt.length);
+      console.log('[Enhanced System Prompt] Preview (first 500 chars):', enhancedPrompt.substring(0, 500));
+    }
+
+    return enhancedPrompt;
+  }, []);
+
   // Helper: Get default repository path for /help command
   const getDefaultRepositoryPath = useCallback((): string => {
     return import.meta.env.VITE_DEFAULT_REPO_PATH ||
@@ -453,6 +585,132 @@ export function Chat() {
     }
   }, []);
 
+  // Orchestrate tool calls: call all selected tools sequentially (RAG first if present)
+  const orchestrateToolCalls = useCallback(async (
+    selectedTools: MCPToolWithServer[],
+    userMessage: string,
+    toolConfigs: Record<string, MCPToolConfig>
+  ): Promise<{
+    rag_results?: Array<{ toolName: string; content: unknown; serverUrl: string }>;
+    other_results: Array<{ toolName: string; result: unknown; serverUrl: string }>;
+  }> => {
+    if (import.meta.env.DEV) {
+      console.log('[Tool Orchestration] Starting orchestration for tools:', selectedTools.map(t => t.name));
+    }
+
+    // 1. Separate RAG tools from others
+    const ragTools = selectedTools.filter(tool =>
+      tool.name.includes('rag_data') || tool.name.startsWith('rag_')
+    );
+    const otherTools = selectedTools.filter(tool =>
+      !tool.name.includes('rag_data') && !tool.name.startsWith('rag_')
+    );
+
+    const totalTools = selectedTools.length;
+    let currentToolIndex = 0;
+
+    // 2. Call RAG tools first
+    const rag_results: Array<{ toolName: string; content: unknown; serverUrl: string }> = [];
+
+    if (ragTools.length > 0 && import.meta.env.DEV) {
+      console.log('[RAG Priority] Calling RAG tools first:', ragTools.map(t => t.name));
+    }
+
+    for (const tool of ragTools) {
+      currentToolIndex++;
+
+      if (import.meta.env.DEV) {
+        console.log(`[Tool Call] Calling ${tool.name} (${currentToolIndex}/${totalTools})...`);
+      }
+
+      // Get args from config, merge with defaults
+      const toolConfig = toolConfigs[tool.name] || { selected: false, args: {} };
+      const mergedArgs = {
+        ...(toolConfig.args || {}),
+      };
+
+      // Add query if not provided
+      if (!mergedArgs.query) {
+        mergedArgs.query = userMessage;
+      }
+
+      try {
+        const result = await callMCPTool(tool.name, mergedArgs, tool.serverName);
+        rag_results.push({
+          toolName: tool.name,
+          content: result,
+          serverUrl: tool.serverUrl
+        });
+
+        if (import.meta.env.DEV) {
+          console.log(`[Tool Call] ${tool.name} completed successfully`);
+        }
+      } catch (error) {
+        console.error(`[Tool Orchestration] Error calling ${tool.name}:`, error);
+        // Continue with next tool
+      }
+    }
+
+    // 3. Call other tools sequentially
+    const other_results: Array<{ toolName: string; result: unknown; serverUrl: string }> = [];
+
+    for (const tool of otherTools) {
+      currentToolIndex++;
+
+      if (import.meta.env.DEV) {
+        console.log(`[Tool Call] Calling ${tool.name} (${currentToolIndex}/${totalTools})...`);
+      }
+
+      const toolConfig = toolConfigs[tool.name] || { selected: false, args: {} };
+      const mergedArgs = { ...(toolConfig.args || {}) };
+
+      // Special handling for Git tools: if no path, use default
+      if (tool.serverName === 'git' && tool.inputSchema?.properties) {
+        const pathParamNames = ['path', 'repo', 'repository', 'repo_path', 'directory', 'dir'];
+        const pathParam = Object.keys(tool.inputSchema.properties).find(param =>
+          pathParamNames.some(name => param.toLowerCase().includes(name))
+        );
+
+        if (pathParam && !mergedArgs[pathParam]) {
+          mergedArgs[pathParam] = import.meta.env.VITE_DEFAULT_REPO_PATH || '/Users/khan/Projects/ai-challenge';
+        }
+      }
+
+      // Inject user_id for cloud_flow tools
+      if (tool.serverName === 'cloud_flow') {
+        mergedArgs.user_id = selectedUserId;
+      }
+
+      try {
+        const result = await callMCPTool(tool.name, mergedArgs, tool.serverName);
+        other_results.push({
+          toolName: tool.name,
+          result: result,
+          serverUrl: tool.serverUrl
+        });
+
+        if (import.meta.env.DEV) {
+          console.log(`[Tool Call] ${tool.name} completed successfully`);
+        }
+      } catch (error) {
+        console.error(`[Tool Orchestration] Error calling ${tool.name}:`, error);
+        // Continue with next tool
+      }
+    }
+
+    // 4. Return aggregated results
+    const aggregated = {
+      rag_results: rag_results.length > 0 ? rag_results : undefined,
+      other_results
+    };
+
+    if (import.meta.env.DEV) {
+      console.log('[Aggregated Results]', aggregated);
+    }
+
+    return aggregated;
+  }, []);
+
   const handleSend = async (userMessage: string) => {
     if (isLoading) return;
 
@@ -564,6 +822,123 @@ export function Chat() {
         console.log('[handleSend] Using help mode configs:', helpToolConfigsRef.current !== null);
       }
 
+      // ====== NEW ORCHESTRATION LOGIC ======
+      // Determine if orchestration is needed:
+      // 1. Multiple tools selected, OR
+      // 2. Single RAG tool selected
+      const needsOrchestration =
+        selectedTools.length > 1 ||
+        (selectedTools.length === 1 && (
+          selectedTools[0].name.includes('rag_data') || selectedTools[0].name.startsWith('rag_')
+        ));
+
+      if (import.meta.env.DEV) {
+        console.log('[handleSend] Needs orchestration:', needsOrchestration);
+      }
+
+      // If orchestration is needed, use new flow
+      if (needsOrchestration && selectedTools.length > 0) {
+        if (import.meta.env.DEV) {
+          console.log('[handleSend] Using orchestration flow for tools:', selectedTools.map(t => t.name));
+        }
+
+        // 1. Orchestrate all tool calls sequentially (RAG first if present)
+        const orchestratedResults = await orchestrateToolCalls(
+          selectedTools,
+          userMessage,
+          activeToolConfigs
+        );
+
+        // 2. Build enhanced system prompt with aggregated tool data
+        const enhancedSystemPromptWithData = buildEnhancedSystemPromptWithToolData(
+          systemPrompt,
+          orchestratedResults
+        );
+
+        // 3. Prepare messages for API
+        const messagesToSendToAPI = getMessagesForAPI(baseMessages);
+
+        // 4. Make single LLM call WITHOUT tools parameter (no function calling)
+        let assistantResponse: string;
+        let tokenUsage: TokenUsage | undefined;
+        let totalTokens: number | undefined;
+
+        if (selectedModel.provider === 'gigachat') {
+          const gigachatResponse = await sendGigaChatMessage(
+            messagesToSendToAPI,
+            enhancedSystemPromptWithData,
+            temperature,
+            undefined, // No tools parameter - no function calling
+          );
+          assistantResponse = gigachatResponse.content;
+          tokenUsage = gigachatResponse.tokenUsage;
+        } else if (selectedModel.provider === 'openrouter') {
+          const openRouterResponse = await sendOpenRouterMessage(
+            messagesToSendToAPI,
+            enhancedSystemPromptWithData,
+            temperature,
+          );
+          assistantResponse = openRouterResponse.content;
+          tokenUsage = openRouterResponse.tokenUsage;
+        } else {
+          const hfResponse = await sendHuggingFaceMessage(
+            messagesToSendToAPI,
+            selectedModel.modelId as HuggingFaceModel,
+            enhancedSystemPromptWithData,
+            temperature,
+          );
+          assistantResponse = hfResponse.content;
+          totalTokens = hfResponse.totalTokens;
+        }
+
+        // Calculate duration
+        const totalEndTime = performance.now();
+        const totalDuration = totalEndTime - startTime;
+
+        // Create assistant message
+        const assistantMessage: ChatMessage = {
+          role: 'assistant',
+          content: assistantResponse,
+          totalTokens,
+          tokenUsage,
+          duration: totalDuration,
+        };
+
+        // Update messages
+        const messagesWithAssistant = [...baseMessages, assistantMessage];
+        setMessages(messagesWithAssistant);
+
+        // Update response count and check for compression
+        const newCount = assistantResponseCount + 1;
+        setAssistantResponseCount(newCount);
+
+        if (newCount % 5 === 0) {
+          performCompression(messagesWithAssistant);
+        }
+
+        // Cleanup help mode tools (one-time use)
+        if (helpModeActiveRef.current) {
+          disableAllTools();
+          setHelpModeActive(false);
+          helpModeActiveRef.current = false;
+          helpToolConfigsRef.current = null;
+          helpToolsRef.current = null;
+
+          if (import.meta.env.DEV) {
+            console.log('[Help Mode] Tools disabled after orchestration');
+          }
+        }
+
+        // Exit early - orchestration flow complete
+        setIsLoading(false);
+        return;
+      }
+
+      // ====== EXISTING REACTIVE FLOW (for single non-RAG tool or no tools) ======
+      if (import.meta.env.DEV && !needsOrchestration) {
+        console.log('[handleSend] Using existing reactive flow (single non-RAG tool or no tools)');
+      }
+
       // Конвертируем MCP инструменты в формат GigaChat (только для GigaChat)
       const gigaChatTools = selectedModel.provider === 'gigachat' && selectedTools.length > 0
         ? convertMCPToolsToGigaChatTools(selectedTools)
@@ -645,6 +1020,13 @@ export function Chat() {
             if (!mergedArgs.query) {
               mergedArgs.query = userMessage;
             }
+          }
+
+          // Inject user_id for cloud_flow tools
+          const activeTools = helpToolsRef.current || mcpTools;
+          const toolInfo = activeTools?.find((t: MCPToolWithServer) => t.name === functionCallData.name);
+          if (toolInfo?.serverName === 'cloud_flow') {
+            mergedArgs.user_id = selectedUserId;
           }
 
           // Логирование для отладки
@@ -768,6 +1150,12 @@ export function Chat() {
 
               if (secondFunctionCall.name === 'rag_data' && !secondMergedArgs.query) {
                 secondMergedArgs.query = userMessage;
+              }
+
+              // Inject user_id for cloud_flow tools
+              const secondToolInfo = activeTools?.find((t: MCPToolWithServer) => t.name === secondFunctionCall.name);
+              if (secondToolInfo?.serverName === 'cloud_flow') {
+                secondMergedArgs.user_id = selectedUserId;
               }
 
               if (import.meta.env.DEV) {
@@ -927,6 +1315,7 @@ export function Chat() {
         modelConfig: selectedModel,
         temperature,
         assistantResponseCount,
+        selectedUserId,
       };
 
       // Если нет ID, создаем новый
@@ -953,6 +1342,7 @@ export function Chat() {
     setSelectedModel(conversation.modelConfig);
     setTemperature(conversation.temperature);
     setAssistantResponseCount(conversation.assistantResponseCount);
+    setSelectedUserId(conversation.selectedUserId || 101);
     setCurrentConversationIdState(conversation.id);
     setError(null);
   };
@@ -998,6 +1388,11 @@ export function Chat() {
             <TemperatureSlider
               value={temperature}
               onChange={setTemperature}
+            />
+            <UserIdSelector
+              value={selectedUserId}
+              onChange={setSelectedUserId}
+              disabled={isLoading}
             />
           </div>
 

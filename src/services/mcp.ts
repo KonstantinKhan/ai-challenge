@@ -47,6 +47,18 @@ function getServerConfigs(): MCPServerConfig[] {
     enabled: true,
   });
 
+  // Cloud Flow MCP server
+  const cloudFlowUrl = import.meta.env.DEV
+    ? `${window.location.origin}/api/cloud_flow`
+    : 'http://localhost:8086/';
+
+  configs.push({
+    name: 'cloud_flow',
+    url: cloudFlowUrl,
+    displayName: 'Cloud Flow',
+    enabled: true,
+  });
+
   return configs;
 }
 

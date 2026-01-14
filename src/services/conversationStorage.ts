@@ -143,7 +143,7 @@ export function createNewConversation(
 ): SavedConversation {
   const id = generateId();
   const now = new Date().toISOString();
-  
+
   return {
     id,
     title: 'Новый диалог',
@@ -154,5 +154,6 @@ export function createNewConversation(
     modelConfig,
     temperature,
     assistantResponseCount: 0,
+    selectedUserId: 101, // Default user ID
   };
 }
