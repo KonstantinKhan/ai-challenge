@@ -74,28 +74,7 @@ export default defineConfig({
             }
             proxyReq.removeHeader('origin');
           });
-          proxy.on('proxyRes', (proxyRes, req, _res) => {
-            proxyRes.headers['access-control-allow-origin'] = '*';
-            proxyRes.headers['access-control-allow-methods'] = 'GET, POST, DELETE, OPTIONS';
-            proxyRes.headers['access-control-allow-headers'] = 'Content-Type, Accept, Authorization, Mcp-Session-Id';
-          });
-        },
-      },
-      '/api/git': {
-        target: 'http://localhost:8085',
-        changeOrigin: true,
-        secure: false,
-        rewrite: (path) => path.replace(/^\/api\/git/, ''),
-        configure: (proxy, _options) => {
-          proxy.on('proxyReq', (proxyReq, req, _res) => {
-            if (req.method === 'GET') {
-              proxyReq.setHeader('Accept', 'text/event-stream');
-              proxyReq.setHeader('Cache-Control', 'no-cache');
-              proxyReq.setHeader('Connection', 'keep-alive');
-            }
-            proxyReq.removeHeader('origin');
-          });
-          proxy.on('proxyRes', (proxyRes, req, _res) => {
+          proxy.on('proxyRes', (proxyRes, _req, _res) => {
             proxyRes.headers['access-control-allow-origin'] = '*';
             proxyRes.headers['access-control-allow-methods'] = 'GET, POST, DELETE, OPTIONS';
             proxyRes.headers['access-control-allow-headers'] = 'Content-Type, Accept, Authorization, Mcp-Session-Id';
@@ -116,7 +95,28 @@ export default defineConfig({
             }
             proxyReq.removeHeader('origin');
           });
-          proxy.on('proxyRes', (proxyRes, req, _res) => {
+          proxy.on('proxyRes', (proxyRes, _req, _res) => {
+            proxyRes.headers['access-control-allow-origin'] = '*';
+            proxyRes.headers['access-control-allow-methods'] = 'GET, POST, DELETE, OPTIONS';
+            proxyRes.headers['access-control-allow-headers'] = 'Content-Type, Accept, Authorization, Mcp-Session-Id';
+          });
+        },
+      },
+      '/api/mcp_tasks': {
+        target: 'http://localhost:8090',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/api\/mcp_tasks/, ''),
+        configure: (proxy, _options) => {
+          proxy.on('proxyReq', (proxyReq, req, _res) => {
+            if (req.method === 'GET') {
+              proxyReq.setHeader('Accept', 'text/event-stream');
+              proxyReq.setHeader('Cache-Control', 'no-cache');
+              proxyReq.setHeader('Connection', 'keep-alive');
+            }
+            proxyReq.removeHeader('origin');
+          });
+          proxy.on('proxyRes', (proxyRes, _req, _res) => {
             proxyRes.headers['access-control-allow-origin'] = '*';
             proxyRes.headers['access-control-allow-methods'] = 'GET, POST, DELETE, OPTIONS';
             proxyRes.headers['access-control-allow-headers'] = 'Content-Type, Accept, Authorization, Mcp-Session-Id';

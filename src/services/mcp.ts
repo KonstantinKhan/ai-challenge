@@ -35,18 +35,6 @@ function getServerConfigs(): MCPServerConfig[] {
     enabled: true,
   });
 
-  // Git MCP server
-  const gitUrl = import.meta.env.DEV
-    ? `${window.location.origin}/api/git`
-    : 'http://localhost:8085/';
-
-  configs.push({
-    name: 'git',
-    url: gitUrl,
-    displayName: 'Git Operations',
-    enabled: true,
-  });
-
   // Cloud Flow MCP server
   const cloudFlowUrl = import.meta.env.DEV
     ? `${window.location.origin}/api/cloud_flow`
@@ -56,6 +44,18 @@ function getServerConfigs(): MCPServerConfig[] {
     name: 'cloud_flow',
     url: cloudFlowUrl,
     displayName: 'Cloud Flow',
+    enabled: true,
+  });
+
+  // MCP Tasks server
+  const mcpTasksUrl = import.meta.env.DEV
+    ? `${window.location.origin}/api/mcp_tasks`
+    : 'http://localhost:8090/';
+
+  configs.push({
+    name: 'mcp_tasks',
+    url: mcpTasksUrl,
+    displayName: 'MCP Tasks',
     enabled: true,
   });
 

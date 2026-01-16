@@ -5,14 +5,14 @@ import type { ChatMessage, ModelConfig, HuggingFaceModel } from '../types/gigach
 
 export const SUMMARY_MARKER = '[CONVERSATION SUMMARY]';
 
-const COMPRESSION_SYSTEM_PROMPT = `You are a conversation summarizer. Your task is to create a concise summary of the conversation history while preserving all critical information.
+const COMPRESSION_SYSTEM_PROMPT = `Ты - система сжатия диалогов. Твоя задача - создать краткое резюме истории разговора, сохраняя всю критически важную информацию.
 
-RULES:
-- Preserve key facts, decisions, and context
-- Maintain chronological order of events
-- Use clear, structured format
-- If a previous summary exists, integrate new messages with it
-- Output ONLY the summary text, no metadata or markers`;
+ПРАВИЛА:
+- Сохраняй ключевые факты, решения и контекст
+- Соблюдай хронологический порядок событий
+- Используй чёткий, структурированный формат
+- Если существует предыдущее резюме, интегрируй новые сообщения с ним
+- Выводи ТОЛЬКО текст резюме, без метаданных или маркеров`;
 
 /**
  * Filters messages to send to API
@@ -80,13 +80,13 @@ function buildCompressionPrompt(
     return [
       {
         role: 'user' as const,
-        content: `Previous conversation summary:
+        content: `Предыдущее резюме разговора:
 ${previousSummary}
 
-New messages to integrate:
+Новые сообщения для интеграции:
 ${messagesToCompress.map((m, i) => `${i + 1}. [${m.role}]: ${m.content}`).join('\n')}
 
-Please create an updated summary that integrates the previous summary with these new messages.`
+Пожалуйста, создай обновлённое резюме, которое интегрирует предыдущее резюме с этими новыми сообщениями.`
       }
     ];
   } else {
@@ -94,10 +94,10 @@ Please create an updated summary that integrates the previous summary with these
     return [
       {
         role: 'user' as const,
-        content: `Conversation to summarize:
+        content: `Разговор для суммаризации:
 ${messagesToCompress.map((m, i) => `${i + 1}. [${m.role}]: ${m.content}`).join('\n')}
 
-Please create a concise summary of this conversation.`
+Пожалуйста, создай краткое резюме этого разговора.`
       }
     ];
   }

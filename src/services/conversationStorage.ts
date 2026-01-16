@@ -154,6 +154,5 @@ export function createNewConversation(
     modelConfig,
     temperature,
     assistantResponseCount: 0,
-    selectedUserId: 101, // Default user ID
   };
 }

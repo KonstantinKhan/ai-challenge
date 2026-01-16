@@ -98,23 +98,25 @@ Vite dev server proxies API requests to avoid CORS issues (see `vite.config.ts:8
 - Returns response content and token usage
 - Includes HTTP-Referer and X-Title headers for OpenRouter tracking
 
-#### MCP Service - RAG Only Integration (`src/services/mcp.ts`)
+#### MCP Service - Multi-Server Integration (`src/services/mcp.ts`)
 
 **Connection Management:**
-- Implements singleton pattern for MCP client instance
+- Implements multi-server connection registry pattern
 - Uses DualChannelTransport for browser-compatible bidirectional communication
-- Connects exclusively to RAG server on port 8082 (http://localhost:8082/rag)
+- Connects to multiple MCP servers: RAG (port 8082) and Cloud Flow (port 8086)
 - Lazy initialization - connects only when MCP Tools button is clicked
-- `initMCPClient()` function establishes connection to RAG MCP server
-- Connection state tracked to prevent multiple concurrent connections
+- `initMCPClient()` function establishes connections to all configured MCP servers
+- Connection state tracked per-server to prevent multiple concurrent connections
+- Partial failure support - continues with available servers even if some fail
 
 **Tool Discovery:**
-- `getMCPTools()` function fetches available tools list from RAG MCP server
-- Automatically initializes connection if not already connected
-- Transforms MCP SDK types to application-specific types
-- Returns `MCPToolsResponse` with tools array and optional pagination cursor
-- `closeMCPConnection()` function for cleanup and resource management
-- `isMCPConnected()` function to check current connection state
+- `getMCPTools()` function fetches available tools from all connected MCP servers
+- Automatically initializes connections if not already connected
+- Transforms MCP SDK types to application-specific types with server metadata
+- Returns `MultiServerMCPToolsResponse` with tools array and per-server status
+- `closeMCPConnection()` function for cleanup and resource management across all servers
+- `isMCPConnected()` function to check if any servers are connected
+- `getConnectedServers()` and `getServerInfo()` for server status queries
 
 **Type Definitions (`src/types/mcp.ts`):**
 - `MCPTool`: Tool structure with name, description, inputSchema, outputSchema, and annotations
@@ -370,9 +372,11 @@ src/
 
 ### MCP Integration
 
-- Single RAG server integration (port 8082)
-- Tool discovery: `getMCPTools()` returns available tools from RAG server
-- Tool execution: `callMCPTool(toolName, args)` executes tools on RAG server
+- Multi-server MCP architecture connecting to:
+  - RAG server (port 8082) for document search and retrieval
+  - Cloud Flow server (port 8086) for cloud operations
+- Tool discovery: `getMCPTools()` returns available tools from all connected MCP servers
+- Tool execution: `callMCPTool(toolName, args)` executes tools on appropriate server
 - Tools converted to GigaChat Functions API format via `convertMCPToolsToGigaChatTools()`
 - Function calling handled by GigaChat API with automatic tool execution on `function_call` response
 
